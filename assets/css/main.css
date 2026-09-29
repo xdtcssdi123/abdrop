@@ -1,0 +1,230 @@
+/* ══════════════════════════════════════════════════════════════
+   ABDrop 全局样式
+   原则:只有一套低饱和浅灰体系,不用强调色块;动效靠位移与透明度,
+        不靠颜色跳变 —— 这是"极简"的技术定义。
+
+   移动端网页适配要点(逐条都有原因,勿随意删改):
+     1. 用 `dvh` 而非 `vh` —— iOS Safari 地址栏收起/展开会改变可视高度,
+        `100vh` 取的是"地址栏隐藏时"的大尺寸,导致底部被裁掉。
+     2. 安全区四边都要处理 —— 横屏时刘海在左侧,只处理上下会被遮挡。
+     3. 输入框字号不得小于 16px —— 否则 iOS Safari 聚焦时会自动放大页面。
+     4. `touch-action: manipulation` —— 消除 300ms 点击延迟与双击缩放。
+     5. `-webkit-text-size-adjust: 100%` —— 阻止 iOS 横屏时自动放大文字。
+   ══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* 背景:低饱和浅灰渐变 */
+  --bg-top: #f4f6f8;
+  --bg-mid: #eef1f4;
+  --bg-bottom: #e6eaee;
+
+  /* 卡片表面 */
+  --card-bg: rgba(255, 255, 255, 0.72);
+  --card-border: rgba(255, 255, 255, 0.85);
+  --card-blur: 18px;
+
+  /* 文字 */
+  --ink-1: #1b2430;
+  --ink-2: #4a5768;
+  --ink-3: #8b97a6;
+
+  /* 语义色(只用于反馈图标,不做大面积铺色) */
+  --pass: #3fbf7f;
+  --fail: #e8b53c;
+  --danger: #e06a6a;
+
+  /* 层 */
+  --z-card: 1;
+  --z-overlay: 40;
+  --z-sheet: 60;
+  --z-toast: 90;
+
+  /* 安全区(四边:横屏时左右也需避让刘海/圆角) */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /**
+   * 软键盘占用的高度。
+   * 由 composables/useViewport.ts 在 visualViewport 变化时写入。
+   * iOS Safari 不会因键盘而缩小布局视口,若不主动避让,
+   * 底部输入框会被键盘完全盖住。
+   */
+  --kb-inset: 0px;
+
+  --radius-card: 12px;
+  --radius-sheet: 20px;
+
+  /**
+   * 卡片尺寸 —— 全项目唯一调参入口。
+   *
+   * 刻意明显小于整屏:卡片一旦铺满屏幕就成了"面板"而不是"卡片",
+   * 后面的堆叠层也露不出来,堆叠的观感就消失了。
+   * 想整体放大/缩小卡片,只改这两个值即可,不要在组件里改字面量。
+   *
+   * 用 dvh/vw 而非固定 px,保证在不同尺寸的手机上比例一致。
+   */
+  --card-w: min(70vw, 300px);
+  --card-h: min(54dvh, 356px);
+
+  /* 明确的浅色配色,避免系统深色模式把原生控件染黑 */
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#__nuxt {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  /* 阻止 iOS 横屏时自动放大文字 */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overflow: hidden;
+}
+
+body {
+  /*
+   * 高度取三层保险:
+   *   1. height:100%  → 基于 html 的 100%(最广泛兼容,含旧版 Chrome)
+   *   2. 100vh        → 不支持 dvh 的浏览器(Chrome < 108)用它
+   *   3. 100dvh       → 现代浏览器,跟随地址栏动态变化
+   * 后声明的会覆盖前者,不支持该单位的浏览器会忽略对应行。
+   */
+  height: 100%;
+  height: 100vh;
+  height: 100dvh;
+  background: linear-gradient(170deg, var(--bg-top) 0%, var(--bg-mid) 46%, var(--bg-bottom) 100%);
+  background-attachment: fixed;
+  color: var(--ink-1);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  overflow: hidden;
+  /* 关掉下拉刷新与滚动链 */
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* 禁止选中与长按菜单 —— 卡片 App 里这两者只会干扰手势 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 输入区域要放开选中 */
+input,
+textarea,
+[contenteditable='true'] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button,
+a,
+[role='button'],
+label,
+.switch {
+  /* 消除移动端 300ms 点击延迟与双击缩放 */
+  touch-action: manipulation;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+textarea,
+input {
+  font: inherit;
+  color: inherit;
+  /*
+   * 移动端输入控件的最小字号。
+   * iOS Safari 在聚焦字号 <16px 的输入框时会自动放大整个页面,
+   * 且放大后不会自动还原 —— 这是移动端表单最常见的问题。
+   */
+  font-size: max(16px, 1em);
+}
+
+img {
+  /* 图片不参与长按菜单与拖拽 */
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* ── 通用磨砂玻璃面 ─────────────────────────────────────────── */
+.glass {
+  background: var(--card-bg);
+  backdrop-filter: blur(var(--card-blur)) saturate(1.6);
+  -webkit-backdrop-filter: blur(var(--card-blur)) saturate(1.6);
+  border: 1px solid var(--card-border);
+}
+
+/* ── 动效降级 ──────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── 滚动容器 ──────────────────────────────────────────────── */
+.scroll-area {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  /* 只接管纵向平移:横向留给父级,避免手势归属混乱 */
+  touch-action: pan-y;
+}
+.scroll-area::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* ── GPU 合成提示:参与动画的元素统一提层 ───────────────────── */
+.gpu {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* ── 宽屏(平板 / 桌面浏览器):卡片不再随屏幕无限放大 ──────── */
+@media (min-width: 640px) {
+  :root {
+    /* 宽屏下用固定尺寸:大屏幕上"卡片"更应保持实体卡片的感觉 */
+    --card-w: 320px;
+    --card-h: 400px;
+  }
+}
+
+/* ── 矮屏 / 横屏:竖向空间紧张,压缩卡片高度 ────────────────── */
+@media (orientation: landscape) and (max-height: 500px) {
+  :root {
+    --card-w: min(46vw, 280px);
+    --card-h: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 104px);
+  }
+}
+
+/* ── 超窄屏(小屏手机):保证正文仍有足够行宽 ──────────────── */
+@media (max-width: 360px) {
+  :root {
+    --card-w: 78vw;
+    --card-h: 52dvh;
+  }
+}

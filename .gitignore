@@ -1,0 +1,50 @@
+# ── Node / Nuxt ────────────────────────────────────────────────
+node_modules
+.nuxt
+.output
+.data
+.nitro
+.cache
+dist
+
+# ── 测试与覆盖率 ───────────────────────────────────────────────
+coverage
+*.tsbuildinfo
+
+# ── Capacitor 原生工程 ─────────────────────────────────────────
+# 原生工程是生成物,但保留在仓库里便于直接打开 IDE 调试。
+# 若团队约定只提交源码,可取消下面两行的注释:
+# android
+# ios
+
+# Android 构建产物(体积大,可随时重新生成)
+android/.gradle
+android/app/build
+android/build
+android/local.properties
+android/.idea
+android/capacitor-cordova-android-plugins
+
+# iOS 构建产物
+ios/App/Pods
+ios/App/build
+ios/App/DerivedData
+ios/App/App/public
+ios/App/App/capacitor.config.json
+ios/App/Podfile.lock
+ios/.swiftpm
+
+# ── 编辑器与系统 ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea
+.vscode/*
+!.vscode/extensions.json
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# ── 本地环境变量(绝不提交密钥) ────────────────────────────────
+.env
+.env.*
+!.env.example

@@ -1,0 +1,68 @@
+{
+  "name": "abdrop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "极简艾宾浩斯卡片记忆 App — 拍照/输入知识点,AI 归纳补全,按艾宾浩斯曲线自动调度复习",
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare && node scripts/copy-sql-wasm.mjs && node scripts/generate-icons.mjs",
+    "postbuild": "node scripts/copy-sql-wasm.mjs && node scripts/generate-icons.mjs",
+    "typecheck": "nuxt typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "cap:sync": "nuxt generate && npx cap sync",
+    "cap:android": "nuxt generate && npx cap sync android && npx cap open android",
+    "cap:ios": "nuxt generate && npx cap sync ios && npx cap open ios",
+    "cap:add:android": "npx cap add android",
+    "cap:add:ios": "npx cap add ios",
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/camera": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/filesystem": "^7.0.0",
+    "@capacitor/haptics": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor/preferences": "^7.0.0",
+    "fflate": "^0.8.3",
+    "fzstd": "^0.1.1",
+    "idb": "^8.0.0",
+    "motion": "^12.0.0",
+    "nuxt": "^3.14.0",
+    "sql.js": "^1.14.2",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "@nuxt/test-utils": "^3.14.0",
+    "@types/node": "^26.6.3",
+    "@types/sql.js": "^1.4.11",
+    "@vitejs/plugin-vue": "^5.1.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "@vue/test-utils": "^2.4.6",
+    "fake-indexeddb": "^6.0.0",
+    "happy-dom": "^15.0.0",
+    "typescript": "^5.6.0",
+    "unimport": "^7.0.2",
+    "vitest": "^2.1.0",
+    "vue-tsc": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@parcel/watcher",
+      "vue-demi",
+      "better-sqlite3"
+    ]
+  }
+}

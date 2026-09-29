@@ -1,0 +1,18 @@
+{
+  "extends": "./.nuxt/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "types": ["vitest/globals", "node"]
+  },
+  "include": [
+    "app.vue",
+    "components/**/*.vue",
+    "composables/**/*.ts",
+    "lib/**/*.ts",
+    "pages/**/*.vue",
+    "types/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", ".output"]
+}
