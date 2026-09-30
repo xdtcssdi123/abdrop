@@ -3,38 +3,36 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 /**
  * 首页 —— 全屏卡片堆叠,除此之外什么都没有。
  *
- * 三条手势都从 CardStack 冒泡上来,由本页统一落库:
+ * 手势都从 CardStack 冒泡上来,由本页统一落库:
  *   左/右滑 → commitReview(调度记忆等级 + 重算复习时间)
- *   双击    → 打开录入框
- *   顶部下滑 → 弹出合集栏
+ *   单击    → 翻面看答案
+ * 复习分组切换入口在设置页(首页不再有下拉合集栏/录入入口)。
  */
-import { useRouter } from 'vue-router'
 import type { KnowledgeCard, ReviewVerdict } from '~/types'
 import { createReviewService } from '~/lib/review-service'
 import { useCardRepository } from '~/lib/db'
 import { useCollections, useAIConfigState } from '~/composables/useAppState'
+import { useCheckinState } from '~/composables/useCheckinState'
 import { hapticTap } from '~/composables/useNativeBridge'
+import { testNowMs } from '~/lib/clock'
 import { ALL_COLLECTIONS_ID, isAllScope } from '~/lib/db-constants'
-
-const router = useRouter()
 
 const {
   collections,
   activeCollectionId,
   activeCollection,
   refresh: refreshCollections,
-  select,
 } = useCollections()
 const { aiConfig, load: loadAIConfig } = useAIConfigState()
 
 const repo = useCardRepository()
 const service = createReviewService(repo)
+const checkin = useCheckinState()
+// 顶层解构:模板里 ref 自动解包(直接挂在对象上访问会拿到 Ref 本体)
+const { config: checkinConfig, checkedInToday } = checkin
 
 const pool = ref<KnowledgeCard[]>([])
 const composeOpen = ref(false)
-const collectionProg = ref(0)
-/** 合集栏是否已吸合固定(选完才收起) */
-const collectionPinned = ref(false)
 const toast = ref('')
 
 const collectionNameOf = computed(() => {
@@ -57,30 +55,24 @@ const paletteIndexOf = computed(() => {
  * 注意:只统计**当前池子里**的卡。选中某个合集时池子已被过滤,
  * 若直接用它算数量会让其他合集显示 0 —— 所以这里基于全量到期数据。
  */
+/** 全量到期卡(跨全部合集,用于录入后立即入队判定)。 */
 const allDue = ref<KnowledgeCard[]>([])
 
-const counts = computed(() => {
-  const acc: Record<string, number> = {}
-  for (const card of allDue.value) {
-    acc[card.collectionId] = (acc[card.collectionId] ?? 0) + 1
-  }
-  return acc
-})
-
-/** 「全部」范围的到期总数。 */
-const totalCount = computed(() => allDue.value.length)
-
 async function loadPool() {
-  // 全量到期卡:用于合集栏角标统计(不受当前范围影响)
-  allDue.value = await service.loadPool(ALL_COLLECTIONS_ID)
+  // 全量到期卡:录入时「是否属于当前范围」用它统一判断
+  allDue.value = await service.loadPool(ALL_COLLECTIONS_ID, testNowMs())
   // 当前范围的复习队列
-  pool.value = await service.loadPool(activeCollectionId.value)
+  pool.value = await service.loadPool(activeCollectionId.value, testNowMs())
 }
 
 onMounted(async () => {
   await loadAIConfig()
   await refreshCollections()
+  // 冷启动:文件管理器「用 ABDrop 打开 .apkg」→ 先导入再拉池子
+  await handleLaunchApkg()
   await loadPool()
+  await setupCheckinReminder()
+  window.addEventListener('abdrop:imported', onDataImported)
 })
 
 // ── 滑动复习 ──────────────────────────────────────────────────
@@ -90,7 +82,7 @@ async function onReview(verdict: ReviewVerdict) {
   // 先出队(动画已把卡片送走),再落库,保证界面零等待
   pool.value = pool.value.slice(1)
   allDue.value = allDue.value.filter((c) => c.id !== card.id)
-  const next = await service.commitReview(card, verdict)
+  const next = await service.commitReview(card, verdict, testNowMs())
   showToast(
     verdict === 'pass'
       ? `已掌握 · 下次 ${Math.round((next.nextReviewAt - Date.now()) / 86400000)} 天后`
@@ -102,11 +94,10 @@ async function onReview(verdict: ReviewVerdict) {
 /**
  * 打开录入框。
  *
- * 两个入口共用:双击空白处、顶部下滑面板里的「录入」按钮。
- * 从面板进入时先把面板收起,避免录入框与面板叠在一起。
+ * 首页没有可见的录入入口(双击已移除、「录入」按钮在设置页);
+ * 此函数仅由桌面调试的 Enter 键触发,正式入口是设置页的「录入知识点」按钮。
  */
 function openCompose() {
-  collapseCollection()
   composeOpen.value = true
 }
 
@@ -118,14 +109,17 @@ async function onSaveCard(payload: {
   tags: string[]
   collectionId: string
 }) {
-  const card = await service.addCard({
-    front: payload.front,
-    back: payload.back,
-    sourceText: payload.sourceText,
-    imageUri: payload.imageUri,
-    tags: payload.tags,
-    collectionId: payload.collectionId,
-  })
+  const card = await service.addCard(
+    {
+      front: payload.front,
+      back: payload.back,
+      sourceText: payload.sourceText,
+      imageUri: payload.imageUri,
+      tags: payload.tags,
+      collectionId: payload.collectionId,
+    },
+    testNowMs(),
+  )
   // 新卡插到队首,但仅当它属于当前复习范围 ——
   // 否则「选了数学却能刷出刚录的英语卡」,范围就形同虚设
   const inScope = isAllScope(activeCollectionId.value) || card.collectionId === activeCollectionId.value
@@ -136,30 +130,7 @@ async function onSaveCard(payload: {
   showToast('已保存')
 }
 
-// ── 合集栏 ────────────────────────────────────────────────────
-function onCollectionProgress(p: number) {
-  if (collectionPinned.value)
-    return
-  collectionProg.value = p
-}
-
-function onCollectionCommit() {
-  collectionPinned.value = true
-  collectionProg.value = 1
-}
-
-async function onSelectCollection(id: string) {
-  select(id)
-  collectionPinned.value = false
-  collectionProg.value = 0
-  void hapticTap('light')
-  await loadPool()
-}
-
-function collapseCollection() {
-  collectionPinned.value = false
-  collectionProg.value = 0
-}
+// ── 复习范围:切换入口已移至设置页「合集管理 → 复习范围」 ────────
 
 // ── 轻提示 ────────────────────────────────────────────────────
 let toastTimer: ReturnType<typeof setTimeout> | null = null
@@ -169,8 +140,58 @@ function showToast(text: string) {
   toastTimer = setTimeout(() => (toast.value = ''), 1600)
 }
 
+// ── 每日打卡 + 每小时提醒(设置页可配开始/结束时间) ─────────
+/**
+ * 提醒 = 系统后台通知:打开应用时排好今天剩余整点的通知(每小时一次),
+ * 应用在后台/关闭时由系统按时发出;不做应用内弹提示。
+ */
+async function setupCheckinReminder() {
+  await checkin.load()
+  if (!checkin.config.value.enabled) return
+  void checkin.scheduleNotificationsIfNeeded()
+}
+
+async function onCheckinTap() {
+  if (checkin.checkedInToday.value) {
+    showToast('今天已经打过卡啦')
+    return
+  }
+  await checkin.checkIn()
+  showToast('今日打卡成功,明天见')
+}
+
+// ── 打开 .apkg 导入(手机文件管理器「用 ABDrop 打开」) ─────────
+async function handleLaunchApkg() {
+  if (typeof window === 'undefined') return
+  const { isNativePlatform } = await import('~/composables/useNativeBridge')
+  if (!isNativePlatform()) return
+  try {
+    const { App } = await import('@capacitor/app')
+    const launch = await App.getLaunchUrl()
+    if (!launch?.url) return
+    const { importApkgFromUri } = await import('~/composables/useApkgOpen')
+    const report = await importApkgFromUri(launch.url, repo)
+    if (!report) return
+    if (report.warnings.length && report.added === 0) {
+      showToast(`导入失败:${report.warnings[0]}`)
+      return
+    }
+    await refreshCollections()
+    showToast(`已导入 ${report.added} 张卡片`)
+  } catch {
+    /* 原生取不到启动意图,静默 */
+  }
+}
+
+/** 应用运行中收到「导入完成」事件(根组件 appUrlOpen 导入后广播)。 */
+async function onDataImported() {
+  await refreshCollections()
+  await loadPool()
+}
+
 onBeforeUnmount(() => {
   if (toastTimer) clearTimeout(toastTimer)
+  window.removeEventListener('abdrop:imported', onDataImported)
 })
 </script>
 
@@ -183,34 +204,30 @@ onBeforeUnmount(() => {
       :palette-index-of="paletteIndexOf"
       @review="onReview"
       @compose="openCompose"
-      @collection-progress="onCollectionProgress"
-      @collection-commit="onCollectionCommit"
     />
 
-    <!-- 当前复习范围:仅在锁定到单个合集时显示,避免"全部"时多一条冗余信息 -->
+    <!-- 每日打卡胶囊:开启提醒后常驻右上角,未打卡每小时提醒 -->
     <Transition name="fade">
-      <div v-if="!isAllScope(activeCollectionId)" class="scope" @click="onSelectCollection(ALL_COLLECTIONS_ID)">
+      <button
+        v-if="checkinConfig.enabled"
+        class="checkin"
+        :class="{ 'checkin--done': checkedInToday }"
+        type="button"
+        @click="onCheckinTap"
+      >
+        <span class="checkin__dot" />
+        {{ checkedInToday ? '今日已打卡' : '今日未打卡 · 点此打卡' }}
+      </button>
+    </Transition>
+
+    <!-- 当前复习范围:仅在锁定到单个合集时显示;切换入口在设置页 -->
+    <Transition name="fade">
+      <NuxtLink v-if="!isAllScope(activeCollectionId)" class="scope" to="/settings">
         <span class="scope__dot" />
         正在复习「{{ activeCollection.name }}」
-        <span class="scope__hint">· 点此切换</span>
-      </div>
+        <span class="scope__hint">· 点此到设置切换</span>
+      </NuxtLink>
     </Transition>
-
-    <!-- 合集栏遮罩:仅在吸合后出现,点空白收起 -->
-    <Transition name="fade">
-      <div v-if="collectionPinned" class="scrim" @click="collapseCollection" />
-    </Transition>
-
-    <!-- 超薄合集标签栏 -->
-    <CollectionBar
-      :progress="collectionProg"
-      :collections="collections"
-      :active-id="activeCollectionId"
-      :counts="counts"
-      :total-count="totalCount"
-      @select="onSelectCollection"
-      @compose="openCompose"
-    />
 
     <!-- 角落极小齿轮:唯一的设置入口 -->
     <NuxtLink class="gear" to="/settings" aria-label="设置">
@@ -277,6 +294,7 @@ onBeforeUnmount(() => {
   backdrop-filter: blur(14px) saturate(1.4);
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
   white-space: nowrap;
+  text-decoration: none;
 }
 
 .scope__dot {
@@ -292,11 +310,41 @@ onBeforeUnmount(() => {
   color: var(--ink-3);
 }
 
-.scrim {
+/* 每日打卡胶囊:右上角常驻,未打卡时琥珀色提示,打卡后转绿色 */
+.checkin {
   position: absolute;
-  inset: 0;
+  top: calc(var(--safe-top) + 10px);
+  right: calc(10px + var(--safe-right));
   z-index: calc(var(--z-sheet) - 1);
-  background: rgba(20, 28, 38, 0.16);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100vw - var(--safe-left) - var(--safe-right) - 140px);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fail);
+  background: rgba(255, 251, 235, 0.9);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.12);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.checkin__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.checkin--done {
+  color: var(--pass);
+  background: rgba(236, 253, 245, 0.9);
 }
 
 /* 极小齿轮:低对比、不抢视线,但可点区域仍够大 */

@@ -7,6 +7,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true"
         android:theme="@style/AppTheme">
 
         <activity
@@ -17,9 +18,33 @@
             android:launchMode="singleTask"
             android:exported="true">
 
-            <intent-filter>
+                        <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- 用 ABDrop 打开 Anki 牌组文件:content URI 按 MIME 匹配(.apkg 通常注册为 octet-stream/zip) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/vnd.anki" />
+            </intent-filter>
+
+            <!-- 按文件路径扩展名匹配(file:// 带真实文件名时更精确) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:pathPattern=".*\\.apkg" />
+                <data android:pathPattern=".*\\.colpkg" />
+                <data android:pathPattern=".*\\.anki" />
             </intent-filter>
 
         </activity>

@@ -24,11 +24,13 @@
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.1.2",
     "@capacitor/camera": "^7.0.0",
     "@capacitor/core": "^7.0.0",
     "@capacitor/filesystem": "^7.0.0",
     "@capacitor/haptics": "^7.0.0",
     "@capacitor/ios": "^7.0.0",
+    "@capacitor/local-notifications": "^7.0.7",
     "@capacitor/preferences": "^7.0.0",
     "fflate": "^0.8.3",
     "fzstd": "^0.1.1",

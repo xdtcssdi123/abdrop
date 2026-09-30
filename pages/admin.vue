@@ -20,6 +20,7 @@ import {
   type ResetReport,
 } from '~/lib/admin'
 import { SEED_COLLECTIONS, SEED_SPECS, countDemoData, seedDemoData, clearDemoData } from '~/lib/seed'
+import { getClockOffsetMs, setClockOffsetMs, testNow } from '~/lib/clock'
 import { useCollections } from '~/composables/useAppState'
 import { hapticTap } from '~/composables/useNativeBridge'
 
@@ -41,6 +42,42 @@ type PendingAction =
   | { action: 'reset'; mode: ResetMode; label: string }
   | { action: 'clearDemo'; count: number }
 const pending = ref<PendingAction | null>(null)
+
+/** 时间调试:偏移分钟数与当前测试时间显示 */
+const clockOffsetMin = ref(0)
+const effectiveTime = ref('')
+const CLOCK_PRESETS = [
+  { label: '回到现在', ms: 0 },
+  { label: '+1小时', ms: 3_600_000 },
+  { label: '+1天', ms: 86_400_000 },
+  { label: '+2天', ms: 2 * 86_400_000 },
+] as const
+
+function formatTestTime(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function refreshClockForm() {
+  clockOffsetMin.value = Math.round(getClockOffsetMs() / 60_000)
+  effectiveTime.value = formatTestTime(testNow())
+}
+
+function applyClockPreset(ms: number) {
+  setClockOffsetMs(ms)
+  refreshClockForm()
+  void hapticTap('light')
+  showToast(ms === 0 ? '已回到真实时间' : '测试时间已应用,回首页查看到期/打卡状态')
+}
+
+function applyClockOffset() {
+  const min = Number(clockOffsetMin.value)
+  if (!Number.isFinite(min)) return
+  setClockOffsetMs(min * 60_000)
+  refreshClockForm()
+  void hapticTap('light')
+  showToast('测试时间已应用,回首页查看状态')
+}
 
 const busy = ref<string>('')
 const toast = ref('')
@@ -77,6 +114,7 @@ onMounted(async () => {
   await refreshCollections()
   await loadPreview()
   await loadDemoCount()
+  refreshClockForm()
 })
 
 async function onScopeChange(id: string) {
@@ -282,6 +320,36 @@ onBeforeUnmount(() => {
         </p>
       </section>
 
+      <!-- ⑤ 时间调试:验证「到点后 App 处于什么状态」 -->
+      <section class="panel">
+        <h2 class="panel__title">时间调试(测试)</h2>
+        <p class="hint">
+          把「当前时间」临时偏移,验证到点后的 App 状态(复习到期队列、打卡胶囊)。
+          只影响 App 内的时间判断;系统通知按真实时钟发送,不受偏移影响。
+        </p>
+        <p class="hint">当前测试时间:<strong>{{ effectiveTime }}</strong></p>
+        <div class="btn-row">
+          <button
+            v-for="p in CLOCK_PRESETS"
+            :key="p.ms"
+            class="btn btn--ghost clock-preset"
+            type="button"
+            @click="applyClockPreset(p.ms)"
+          >
+            {{ p.label }}
+          </button>
+        </div>
+        <div class="btn-row">
+          <input
+            v-model.number="clockOffsetMin"
+            class="clock-input"
+            type="number"
+            placeholder="偏移分钟数(可负)"
+          />
+          <button class="btn" type="button" @click="applyClockOffset">应用</button>
+        </div>
+      </section>
+
       <pre v-if="lastReport" class="report">{{ lastReport }}</pre>
 
       <p class="footnote">
@@ -398,6 +466,11 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* 同 settings:flex 列滚动容器子项禁止收缩,否则 overflow:hidden 的面板会被压缩而非滚动 */
+.admin__body > * {
+  flex-shrink: 0;
 }
 
 .lead {
@@ -663,6 +736,31 @@ onBeforeUnmount(() => {
 .btn-row {
   display: flex;
   gap: 10px;
+}
+
+/* 时间调试:预设按钮与分钟数输入 */
+.clock-preset {
+  flex: 1;
+  padding: 9px 10px;
+  min-height: 40px;
+  font-size: 14px;
+}
+
+.clock-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  min-height: 46px;
+  border-radius: 10px;
+  border: 1px solid rgba(27, 36, 48, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+  font-size: 16px;
+  outline: none;
+}
+
+.clock-input:focus {
+  border-color: rgba(63, 191, 127, 0.55);
+  box-shadow: 0 0 0 3px rgba(63, 191, 127, 0.12);
 }
 
 .toast {

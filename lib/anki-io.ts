@@ -16,7 +16,14 @@ import {
 } from '~/lib/anki'
 import { cardToAnkiRow, planAnkiImport } from '~/lib/anki-map'
 import type { CardRepository } from '~/lib/db'
-import type { ImportReport, KnowledgeCard } from '~/types'
+import type {
+  AIConfig,
+  AppConfigSnapshot,
+  Collection,
+  ExportBundle,
+  ImportReport,
+  KnowledgeCard,
+} from '~/types'
 
 /** 支持导入的扩展名。 */
 export const ANKI_IMPORT_ACCEPT = '.apkg,.tsv,.txt,.csv,.colpkg'
@@ -144,18 +151,26 @@ export async function exportForAnki(
   }
 }
 
-/** 导出 ABDrop 原生备份(含全部调度字段,可完美还原)。 */
+/**
+ * 导出 ABDrop 原生备份 —— 即「保存配置」。
+ *
+ * 单个 JSON 快照:配置(AI 接口 + 当前复习范围)+ 合集 + 卡片(含全部调度字段,
+ * 即复习记忆),可完整还原。`config` 由调用方(设置页)注入当前配置;
+ * 不传则写出不含 config 的旧形态(v2 兼容)。
+ */
 export async function exportNativeBackup(
   repo: CardRepository,
+  config?: AppConfigSnapshot,
   now: Date = new Date(),
 ): Promise<ExportOutcome> {
   const { cards, collections } = await repo.exportAll()
-  const payload = {
-    version: 2 as const,
+  const payload: ExportBundle = {
+    version: 3,
     exportedAt: now.getTime(),
     cards,
     collections,
   }
+  if (config) payload.config = config
   return {
     filename: ankiExportFilename('abdrop-backup', 'json', now),
     content: JSON.stringify(payload, null, 2),
@@ -164,13 +179,23 @@ export async function exportNativeBackup(
   }
 }
 
-/** 从原生备份还原。 */
+/** 原生备份导入结果:卡片统计 + 备份携带的配置快照(由 UI 层决定如何应用)。 */
+export interface NativeBackupResult extends ImportReport {
+  /** 备份里的配置块;v2 备份或无 config 字段时缺省。 */
+  restoredConfig?: AppConfigSnapshot
+}
+
+/** 从原生备份加载(「加载配置」):还原卡片,并解析出配置快照。 */
 export async function importNativeBackup(
   file: File,
   repo: CardRepository,
-): Promise<ImportReport> {
+): Promise<NativeBackupResult> {
   const text = await file.text()
-  let parsed: { cards?: KnowledgeCard[]; collections?: KnowledgeCard[] }
+  let parsed: {
+    cards?: KnowledgeCard[]
+    collections?: Collection[]
+    config?: unknown
+  }
   try {
     parsed = JSON.parse(text)
   } catch {
@@ -190,10 +215,28 @@ export async function importNativeBackup(
     return true
   })
   await repo.importAll({ cards: fresh, collections: collections as any })
-  return {
+
+  const result: NativeBackupResult = {
     added: fresh.length,
     skipped,
     collections: (collections as any[]).map((c: any) => c.name),
     warnings: [],
   }
+
+  // 配置块:结构校验通过才返回,损坏时静默忽略(卡片照常还原)
+  const cfg = parsed.config as AppConfigSnapshot | undefined
+  if (
+    cfg &&
+    typeof cfg === 'object' &&
+    cfg.ai &&
+    typeof cfg.ai === 'object' &&
+    typeof cfg.activeCollectionId === 'string'
+  ) {
+    result.restoredConfig = {
+      ai: cfg.ai as AIConfig,
+      activeCollectionId: cfg.activeCollectionId,
+    }
+  }
+
+  return result
 }

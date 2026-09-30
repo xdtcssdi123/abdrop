@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 /**
- * 设置页 —— 只有三项:AI 接口配置 / 合集管理 / 数据导入导出。
+ * 设置页 —— 录入知识点 + 三项:AI 接口配置 / 合集管理 / 数据导入导出。
  *
- * 产品约束:不放任何"高级选项"。每一项都直接服务于核心流程,
- * 多一个开关都是负担。
+ * 首页不再放任何录入入口(双击已移除、合集栏按钮已移至本页),录入统一从设置页进。
  */
 import type { AIConfig, AIProvider, Collection } from '~/types'
 import { PROVIDER_PRESETS, testAIConnection } from '~/lib/ai'
@@ -15,15 +14,67 @@ import {
   importAnkiFile,
   importNativeBackup,
 } from '~/lib/anki-io'
-import { saveExportFile } from '~/composables/useNativeBridge'
+import { saveExportFile, hapticTap } from '~/composables/useNativeBridge'
 import { useCardRepository } from '~/lib/db'
+import { createReviewService } from '~/lib/review-service'
 import { SEED_COLLECTIONS, SEED_SPECS, clearDemoData, seedDemoData } from '~/lib/seed'
 import { useAIConfigState, useCollections } from '~/composables/useAppState'
+import { useCheckinState } from '~/composables/useCheckinState'
+import { ALL_COLLECTIONS_ID, ALL_COLLECTIONS_NAME } from '~/lib/db-constants'
 
 const { aiConfig, load: loadAIConfig, save: saveAIConfig } = useAIConfigState()
-const { collections, refresh: refreshCollections, create, rename, remove } = useCollections()
+const {
+  collections,
+  activeCollectionId,
+  refresh: refreshCollections,
+  create,
+  rename,
+  remove,
+  select,
+} = useCollections()
 
 const repo = useCardRepository()
+const service = createReviewService(repo)
+
+const checkin = useCheckinState()
+/** 打卡表单本地副本,改动即保存,无需独立「保存」按钮 */
+const checkinEnabled = ref(false)
+const checkinStart = ref('09:00')
+const checkinEnd = ref('22:00')
+/** 打卡提醒卡片是否展开(独立折叠,默认收起,与其他面板互不影响) */
+const checkinOpen = ref(false)
+/** 一天内的分钟数 <-> HH:MM。 */
+function minutesToTime(m: number): string {
+  const h = Math.floor(m / 60) % 24
+  const mm = m % 60
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+}
+function timeToMinutes(t: string): number {
+  const [h, m] = t.split(':').map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+function syncCheckinForm() {
+  checkinEnabled.value = checkin.config.value.enabled
+  checkinStart.value = minutesToTime(checkin.config.value.startMinute)
+  checkinEnd.value = minutesToTime(checkin.config.value.endMinute)
+}
+async function onCheckinToggle(e: Event) {
+  const enabled = (e.target as HTMLInputElement).checked
+  checkinEnabled.value = enabled
+  await checkin.updateConfig({ enabled })
+  syncCheckinForm()
+  showToast(enabled ? '打卡提醒已开启' : '打卡提醒已关闭')
+}
+async function onCheckinStartChange() {
+  await checkin.updateConfig({ startMinute: timeToMinutes(checkinStart.value) })
+  syncCheckinForm()
+  showToast('开始时间已更新')
+}
+async function onCheckinEndChange() {
+  await checkin.updateConfig({ endMinute: timeToMinutes(checkinEnd.value) })
+  syncCheckinForm()
+  showToast('结束时间已更新')
+}
 
 /** 当前打开的折叠面板(none / ai / collections / data)。 */
 const panel = ref<'none' | 'ai' | 'collections' | 'data'>('none')
@@ -32,6 +83,8 @@ const busy = ref('')
 const cardCount = ref(0)
 /** 导入/导出明细,展示给用户确认结果 */
 const lastReport = ref('')
+/** 录入框开关(录入入口已从首页移至本页顶部按钮) */
+const composeOpen = ref(false)
 
 const newCollectionName = ref('')
 /** 示例数据的真实规模,避免文案与数据脱节 */
@@ -46,6 +99,8 @@ onMounted(async () => {
   aiDraft.value = { ...aiConfig.value }
   await refreshCollections()
   cardCount.value = await repo.countCards()
+  await checkin.load()
+  syncCheckinForm()
 })
 
 function toggle(next: 'ai' | 'collections' | 'data') {
@@ -98,7 +153,43 @@ async function onTestAI() {
   }
 }
 
+// ── 录入(入口已移至设置页) ─────────────────────────────────
+async function onSaveCard(payload: {
+  sourceText: string
+  front: string
+  back: string
+  imageUri: string
+  tags: string[]
+  collectionId: string
+}) {
+  await service.addCard({
+    front: payload.front,
+    back: payload.back,
+    sourceText: payload.sourceText,
+    imageUri: payload.imageUri,
+    tags: payload.tags,
+    collectionId: payload.collectionId,
+  })
+  // 保存后同步计数与合集列表;首页在导航返回时会重新加载,新卡立即可见
+  await refreshCollections()
+  cardCount.value = await repo.countCards()
+  composeOpen.value = false
+  void hapticTap('light')
+  showToast('已保存')
+}
+
 // ── 合集管理 ─────────────────────────────────────────────────
+/** 复习范围选项:「全部」+ 各真实合集(首页按此范围刷卡)。 */
+const scopeOptions = computed(() => [
+  { id: ALL_COLLECTIONS_ID, name: ALL_COLLECTIONS_NAME },
+  ...collections.value.map((c) => ({ id: c.id, name: c.name })),
+])
+
+function onSelectScope(id: string) {
+  select(id)
+  showToast(id === ALL_COLLECTIONS_ID ? '已切换:复习全部合集' : '已切换复习范围')
+}
+
 async function onCreateCollection() {
   const name = newCollectionName.value.trim()
   if (!name) return
@@ -168,8 +259,18 @@ async function onImportBackup(e: Event) {
     const report = await importNativeBackup(file, repo)
     cardCount.value = await repo.countCards()
     await refreshCollections()
-    lastReport.value = buildImportReportText(report)
-    showToast(`还原完成:新增 ${report.added} 张`)
+    if (report.restoredConfig) {
+      // 「加载配置」:配置快照覆盖当前 AI 配置与复习范围
+      await saveAIConfig(report.restoredConfig.ai)
+      select(report.restoredConfig.activeCollectionId)
+      aiDraft.value = { ...aiConfig.value }
+      lastReport.value =
+        `${buildImportReportText(report)}\n已恢复 AI 配置与复习范围`
+      showToast(`配置已加载:新增 ${report.added} 张`)
+    } else {
+      lastReport.value = buildImportReportText(report)
+      showToast(`还原完成:新增 ${report.added} 张`)
+    }
   } catch (err) {
     lastReport.value = `还原失败:${err instanceof Error ? err.message : String(err)}`
   } finally {
@@ -192,9 +293,13 @@ async function onExportAnki(format: 'tsv' | 'csv') {
 async function onExportBackup() {
   busy.value = 'export'
   try {
-    const out = await exportNativeBackup(repo)
+    // 「保存配置」:单个 JSON 快照 —— AI 配置 + 复习范围 + 合集 + 卡片(含复习进度)
+    const out = await exportNativeBackup(repo, {
+      ai: { ...aiConfig.value },
+      activeCollectionId: activeCollectionId.value,
+    })
     const res = await saveExportFile(out.filename, out.content)
-    showToast(res.ok ? `已备份 ${out.count} 张` : res.message)
+    showToast(res.ok ? `已保存配置:${out.count} 张卡片` : res.message)
   } finally {
     busy.value = ''
   }
@@ -256,6 +361,50 @@ async function onClearAll() {
     </header>
 
     <div class="settings__body scroll-area">
+      <button class="compose-entry" type="button" @click="composeOpen = true">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path
+            d="M12 5.5 V18.5 M5.5 12 H18.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+          />
+        </svg>
+        录入知识点
+      </button>
+
+      <!-- 每日打卡提醒:可折叠卡片(独立折叠,默认收起),首页右上角胶囊 + 每小时系统通知 -->
+      <section class="panel checkin-panel">
+        <button class="checkin-panel__head" type="button" @click="checkinOpen = !checkinOpen">
+          <span class="panel__name">打卡提醒</span>
+          <span class="panel__meta">{{ checkinEnabled ? `${checkinStart}–${checkinEnd} · 每小时` : '未启用' }}</span>
+          <svg class="panel__caret" :class="{ 'panel__caret--open': checkinOpen }" viewBox="0 0 24 24" width="18" height="18">
+            <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+        <div v-show="checkinOpen" class="checkin-panel__body">
+          <label class="row">
+            <span class="row__label">每日打卡提醒</span>
+            <input v-model="checkinEnabled" class="switch" type="checkbox" @change="onCheckinToggle" />
+          </label>
+
+          <div class="field">
+            <span class="field__label">开始时间</span>
+            <input v-model="checkinStart" class="input" type="time" :disabled="!checkinEnabled" @change="onCheckinStartChange" />
+          </div>
+
+          <div class="field">
+            <span class="field__label">结束时间</span>
+            <input v-model="checkinEnd" class="input" type="time" :disabled="!checkinEnabled" @change="onCheckinEndChange" />
+          </div>
+
+          <p class="field__hint">
+            开启后,当天若还没打卡,从开始时间起每小时发一条系统通知,直到打卡或到结束时间;
+            打卡状态每天自动重置。提醒走系统后台通知,需授予通知权限。
+          </p>
+        </div>
+      </section>
       <!-- ① AI 接口配置 -->
       <section class="panel">
         <button class="panel__head" type="button" @click="toggle('ai')">
@@ -333,15 +482,37 @@ async function onClearAll() {
         </button>
 
         <div v-if="panel === 'collections'" class="panel__body">
-          <ul class="list">
-            <li v-for="col in collections" :key="col.id" class="list__item">
-              <span class="list__name">{{ col.name }}</span>
-              <button class="mini" type="button" @click="onRenameCollection(col)">改名</button>
-              <button v-if="col.id !== 'inbox'" class="mini mini--danger" type="button" @click="onRemoveCollection(col)">
-                删除
-              </button>
-            </li>
-          </ul>
+          <!-- 复习范围:首页按此分组刷卡 -->
+          <div class="group">
+            <span class="field__label">复习范围</span>
+            <ul class="scope-list">
+              <li v-for="opt in scopeOptions" :key="opt.id" class="scope-item">
+                <button
+                  class="scope-opt"
+                  :class="{ 'scope-opt--on': activeCollectionId === opt.id }"
+                  type="button"
+                  @click="onSelectScope(opt.id)"
+                >
+                  <span class="scope-opt__name">{{ opt.name }}</span>
+                  <span v-if="activeCollectionId === opt.id" class="scope-opt__check">✓</span>
+                </button>
+              </li>
+            </ul>
+            <p class="field__hint">选择后,首页只复习该分组的卡片;选「全部」复习所有合集。</p>
+          </div>
+
+          <div class="group">
+            <span class="field__label">合集列表</span>
+            <ul class="list">
+              <li v-for="col in collections" :key="col.id" class="list__item">
+                <span class="list__name">{{ col.name }}</span>
+                <button class="mini" type="button" @click="onRenameCollection(col)">改名</button>
+                <button v-if="col.id !== 'inbox'" class="mini mini--danger" type="button" @click="onRemoveCollection(col)">
+                  删除
+                </button>
+              </li>
+            </ul>
+          </div>
 
           <div class="btn-row">
             <input v-model="newCollectionName" class="input input--grow" type="text" placeholder="新合集名称" @keyup.enter="onCreateCollection" />
@@ -373,7 +544,7 @@ async function onClearAll() {
                 {{ busy === 'import' ? '处理中…' : '导入 Anki 文件' }}
               </button>
               <button class="btn btn--ghost" type="button" :disabled="busy === 'import'" @click="backupInput?.click()">
-                还原 ABDrop 备份
+                加载配置(还原备份)
               </button>
             </div>
             <input ref="ankiInput" class="hidden-input" type="file" :accept="ANKI_IMPORT_ACCEPT" @change="onImportAnki" />
@@ -393,9 +564,13 @@ async function onClearAll() {
             </div>
             <div class="btn-row">
               <button class="btn btn--ghost" type="button" :disabled="busy === 'export'" @click="onExportBackup">
-                完整备份 JSON(含复习进度)
+                保存配置(含卡片与复习进度)
               </button>
             </div>
+            <p class="field__hint">
+              「保存配置」导出单个 JSON 快照:AI 配置、当前复习范围、合集、卡片与复习进度全部包含。
+              文件含 API Key,请勿外传;「加载配置」会覆盖当前 AI 配置与复习范围,卡片按 id 幂等合并。
+            </p>
           </div>
 
           <pre v-if="lastReport" class="report">{{ lastReport }}</pre>
@@ -443,6 +618,16 @@ async function onClearAll() {
         </svg>
       </NuxtLink>
     </div>
+
+    <!-- 录入框(入口在本页顶部的「录入知识点」按钮) -->
+    <ComposeSheet
+      :open="composeOpen"
+      :collections="collections"
+      :active-collection-id="activeCollectionId"
+      :ai-config="aiConfig"
+      @close="composeOpen = false"
+      @save="onSaveCard"
+    />
 
     <Transition name="fade">
       <div v-if="toast" class="toast">{{ toast }}</div>
@@ -499,6 +684,34 @@ async function onClearAll() {
   gap: 12px;
 }
 
+/* 关键:flex 列滚动容器的子项禁止收缩。
+ * .panel 带 overflow:hidden 会使 flex 自动最小尺寸失效(min-height:auto 变 0),
+ * 内容多时 flexbox 会压缩面板而不是溢出滚动 —— 表现为"滑不动、内容被裁"。 */
+.settings__body > * {
+  flex-shrink: 0;
+}
+
+/* 录入入口:全宽主行动按钮,随页面一起滚动 */
+.compose-entry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 52px;
+  border-radius: 14px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--ink-1);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease;
+}
+
+.compose-entry:active {
+  transform: scale(0.98);
+  opacity: 0.9;
+}
+
 .panel {
   border-radius: 14px;
   overflow: hidden;
@@ -515,6 +728,24 @@ async function onClearAll() {
   padding: 16px 18px;
   min-height: 56px;
   text-align: left;
+}
+
+/* 打卡提醒:可折叠卡片头部(独立类,不进 .panel__head 折叠计数) */
+.checkin-panel__head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  min-height: 56px;
+  text-align: left;
+}
+
+.checkin-panel__body {
+  padding: 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .panel__name {
@@ -706,6 +937,54 @@ async function onClearAll() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 复习范围选项列表(独立类,避免与合集列表的 .list__item 混淆) */
+.scope-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scope-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 复习范围选项:整行可点,当前范围高亮 */
+.scope-opt {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 15px;
+  color: var(--ink-2);
+  background: rgba(27, 36, 48, 0.05);
+  text-align: left;
+}
+
+.scope-opt--on {
+  color: #fff;
+  background: var(--ink-1);
+}
+
+.scope-opt__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-opt__check {
+  flex: 0 0 auto;
+  font-weight: 700;
 }
 
 .mini {

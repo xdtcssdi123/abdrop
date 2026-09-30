@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 /**
- * ComposeSheet —— 双击空白处唤起的录入框。
+ * ComposeSheet —— 从设置页「录入知识点」按钮进入的录入框。
  *
  * 交互契约:
  *   - 半透明磨砂面板,从下方浮起;点遮罩 / Esc 关闭
@@ -375,6 +375,11 @@ function onKeydown(e: KeyboardEvent) {
   flex-direction: column;
   gap: 14px;
   padding: 12px 0;
+}
+
+/* 同 settings/admin:flex 列滚动容器子项禁止收缩 */
+.compose__body > * {
+  flex-shrink: 0;
 }
 
 .field {

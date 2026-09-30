@@ -134,10 +134,18 @@ export interface AISummary {
   keywords: string[]
 }
 
+/** 应用配置快照:AI 接口 + 当前复习范围。随原生备份一起导出/还原。 */
+export interface AppConfigSnapshot {
+  ai: AIConfig
+  activeCollectionId: string
+}
+
 /** 数据导出包格式(ABDrop 原生备份)。 */
 export interface ExportBundle {
-  version: 2
+  version: 3
   exportedAt: number
+  /** 配置快照(AI 接口 + 复习范围);v2 及更早的备份无此字段。 */
+  config?: AppConfigSnapshot
   cards: KnowledgeCard[]
   collections: Collection[]
 }

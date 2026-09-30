@@ -1,11 +1,12 @@
 /**
  * 手势识别引擎 —— 纯逻辑,不碰 DOM。
  *
- * 首页三套手势在此收敛为可测的状态机:
+ * 当前首页用到的手势在此收敛为可测的状态机:
  *   - 横向拖拽(跟手) → 右滑 pass / 左滑 fail
- *   - 双击          → 唤起录入
- *   - 顶部下滑       → 合集栏
+ *   - 单击/双击仲裁 → 单击翻面(双击已无业务,仅仲裁取消挂起单击)
  *
+ * 仍保留下拉识别工具(shouldYieldToCollection / collectionProgress /
+ * shouldOpenCollection)作为已测用的手势原语,但首页已不再消费。
  * 阈值与手势互斥规则集中在这里,组件只负责把 touch 事件喂进来。
  */
 
@@ -128,7 +129,7 @@ export function createDoubleTapDetector(
  *
  * 冲突根源:单击要立即响应才有手感,但等一个双击窗口又会迟滞。
  * 取舍:单击延迟一个双击窗口(280ms)后再触发 —— 卡片翻面属于
- * 「非跟手」操作,这个延迟无感;而双击(唤起录入)零延迟。
+ * 「非跟手」操作,这个延迟无感;双击如今无业务(仅用于取消挂起的单击)。
  */
 export function createTapDetector(
   handlers: { onSingleTap?: () => void; onDoubleTap?: () => void },

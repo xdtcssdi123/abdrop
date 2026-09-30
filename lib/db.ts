@@ -163,6 +163,8 @@ export interface CardRepository {
   /** 已存在的全部 id(导入去重用) */
   existingIds(): Promise<Set<string>>
   removeCard(id: string): Promise<void>
+  /** 批量软删除(单事务,移除示例数据等场景避免逐条事务)。 */
+  removeCards(ids: readonly string[]): Promise<number>
   countCards(): Promise<number>
 
   listCollections(): Promise<Collection[]>
@@ -229,6 +231,18 @@ export function createMemoryRepository(): CardRepository {
     async removeCard(id) {
       const card = cards.get(id)
       if (card) cards.set(id, { ...card, deleted: true, updatedAt: Date.now() })
+    },
+    async removeCards(ids) {
+      const now = Date.now()
+      let n = 0
+      for (const id of ids) {
+        const card = cards.get(id)
+        if (card && !card.deleted) {
+          cards.set(id, { ...card, deleted: true, updatedAt: now })
+          n++
+        }
+      }
+      return n
     },
     async countCards() {
       return [...cards.values()].filter((c) => !c.deleted).length
@@ -371,6 +385,22 @@ export function createIndexedDBRepository(): CardRepository {
       const card = (await db.get(STORE_CARDS, id)) as KnowledgeCard | undefined
       if (!card) return
       await db.put(STORE_CARDS, { ...card, deleted: true, updatedAt: Date.now() })
+    },
+    async removeCards(ids) {
+      if (!ids.length) return 0
+      const db = await getDB()
+      const tx = db.transaction(STORE_CARDS, 'readwrite')
+      const now = Date.now()
+      let n = 0
+      for (const id of ids) {
+        const card = (await tx.store.get(id)) as KnowledgeCard | undefined
+        if (card && !card.deleted) {
+          await tx.store.put({ ...card, deleted: true, updatedAt: now })
+          n++
+        }
+      }
+      await tx.done
+      return n
     },
     async countCards() {
       const db = await getDB()

@@ -428,12 +428,9 @@ export async function countDemoData(repo: CardRepository): Promise<number> {
   return all.filter((c) => c.id.startsWith(`${SEED_ID_PREFIX}-`)).length
 }
 
-/** 清除全部示例卡片(不动用户自己录入的卡)。 */
+/** 清除全部示例卡片(不动用户自己录入的卡)。批量软删,单事务,快且确定。 */
 export async function clearDemoData(repo: CardRepository): Promise<number> {
   const all = await repo.listCards()
   const demo = all.filter((c) => c.id.startsWith(`${SEED_ID_PREFIX}-`))
-  for (const card of demo) {
-    await repo.removeCard(card.id)
-  }
-  return demo.length
+  return repo.removeCards(demo.map((c) => c.id))
 }

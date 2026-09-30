@@ -48,3 +48,9 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+
+# Built APK deliverables (local)
+dist-apk/
+
+# 从网上找的示例 Anki 牌组(演示用)
+samples-apkg/

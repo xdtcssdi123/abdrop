@@ -24,13 +24,10 @@ import {
 import { animate } from 'motion'
 import type { KnowledgeCard, ReviewVerdict } from '~/types'
 import {
-  collectionProgress,
   commitProgress,
   constrainedOffset,
   createDragState,
   createTapDetector,
-  shouldOpenCollection,
-  shouldYieldToCollection,
   tiltForOffset,
   updateDrag,
   type DragState,
@@ -55,8 +52,6 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: 'review', verdict: ReviewVerdict): void
   (e: 'compose'): void
-  (e: 'collectionProgress', progress: number): void
-  (e: 'collectionCommit'): void
 }>()
 
 const rootEl = ref<HTMLElement | null>(null)
@@ -86,11 +81,10 @@ const dragging = ref(false)
 /** 非响应式的手势工作区,避免每帧触发依赖收集之外的开销。 */
 let drag: DragState | null = null
 let pointerStartAt = 0
-let mode: 'idle' | 'swipe' | 'collection' = 'idle'
+let mode: 'idle' | 'swipe' = 'idle'
 let rafId = 0
 
 const viewportWidth = () => (typeof window === 'undefined' ? 375 : window.innerWidth)
-const viewportHeight = () => (typeof window === 'undefined' ? 667 : window.innerHeight)
 
 /** 可见卡片(最多 3 层)。 */
 const visibleCards = computed(() => props.cards.slice(0, STACK.visible))
@@ -182,18 +176,14 @@ function unfreezeDrag() {
 // ── 手势 ──────────────────────────────────────────────────────
 /**
  * 单击 = 翻面看答案(Anki 式先回忆后核对)。
- * 双击 = 唤起录入框。
- * 两者共存靠 createTapDetector 的窗口仲裁,见 lib/gesture.ts 注释。
+ * 双击不做任何事(录入只能走顶部面板的「录入」按钮)——
+ * 单双击仲裁仍保留:第二次快速点击会取消挂起的单击,避免误翻面。
  */
 const tapDetector = createTapDetector({
   onSingleTap: () => {
     if (!topCard.value?.back) return
     revealed.value = !revealed.value
     void hapticTap('light')
-  },
-  onDoubleTap: () => {
-    void hapticTap('light')
-    emit('compose')
   },
 })
 
@@ -215,27 +205,18 @@ function onTouchMove(e: TouchEvent) {
   drag = updateDrag(drag, t.clientX, t.clientY)
   const vw = viewportWidth()
 
-  // 方向锁判定:顶部边缘起手且纵向为主 → 让位给合集栏
+  // 方向锁判定:横移 → 滑动;纵移 → 直接吞掉(首页无下拉功能,不产生位移与反馈)
   if (mode === 'idle' && drag.locked !== 'none') {
-    if (shouldYieldToCollection(drag.startY, drag.dx, drag.dy, viewportHeight())) {
-      mode = 'collection'
-    } else if (drag.locked === 'horizontal') {
+    if (drag.locked === 'horizontal') {
       mode = 'swipe'
     } else {
-      // 纵向下拉但不在顶部边缘 —— 直接吞掉,不产生任何位移
       mode = 'idle'
       drag = null
       dragging.value = false
+      // 吞掉纵向手势,避免触发 WebView 下拉回弹/刷新
+      e.preventDefault()
       return
     }
-  }
-
-  if (mode === 'collection') {
-    // 只在向下时给反馈,向上回弹归零
-    const p = collectionProgress(Math.max(drag.dy, 0))
-    emit('collectionProgress', p)
-    e.preventDefault()
-    return
   }
 
   if (mode === 'swipe') {
@@ -315,19 +296,6 @@ function onTouchEnd(e: TouchEvent) {
 
   const touch = e.changedTouches?.[0]
   const elapsed = performance.now() - pointerStartAt
-
-  if (wasMode === 'collection') {
-    const p = collectionProgress(Math.max(state.dy, 0))
-    if (shouldOpenCollection(Math.max(state.dy, 0))) {
-      void hapticTap('light')
-      emit('collectionProgress', 1)
-      emit('collectionCommit')
-    } else {
-      emit('collectionProgress', 0)
-    }
-    mode = 'idle'
-    return
-  }
 
   if (wasMode === 'swipe') {
     // ── 判定:右滑 pass / 左滑 fail ──
@@ -683,7 +651,7 @@ defineExpose({ commitSwipe, snapBack, revealed, emitParticles })
     <!-- 空态 -->
     <div v-if="!visibleCards.length" class="empty">
       <p class="empty__title">暂无待复习卡片</p>
-      <p class="empty__hint">双击任意空白处录入</p>
+      <p class="empty__hint">点右下角齿轮,到设置页录入知识点</p>
     </div>
   </section>
 </template>
@@ -803,7 +771,7 @@ defineExpose({ commitSwipe, snapBack, revealed, emitParticles })
   align-items: center;
   justify-content: center;
   gap: 8px;
-  /* 容器整体不拦截手势(否则会挡住双击录入),仅按钮自身可点 */
+  /* 容器不拦截手势:空态点位让触摸事件全部流过(单击翻面仍由 CardStack 处理) */
   pointer-events: none;
 }
 
