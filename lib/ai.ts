@@ -18,7 +18,7 @@ export const DEFAULT_AI_CONFIG: AIConfig = {
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
   model: 'gpt-4o-mini',
-  timeoutMs: 20000,
+  timeoutMs: 60000,
   vision: false,
   lastTestOk: null,
   lastTestedAt: 0,
