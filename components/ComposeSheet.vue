@@ -11,7 +11,7 @@ import { ref, computed, watch, nextTick } from 'vue'
  *   - 未启用 AI 时不阻塞保存:直接把原文作为正面
  */
 import type { AIConfig, Collection } from '~/types'
-import { summarizeKnowledge, summarizeMany, draftsFromImageResults } from '~/lib/ai'
+import { summarizeKnowledgeMany, summarizeMany, draftsFromImageResults } from '~/lib/ai'
 import { firstLine } from '~/lib/ai'
 import { captureImage, platformFetch } from '~/composables/useNativeBridge'
 import { scrollIntoViewOnKeyboard } from '~/composables/useViewport'
@@ -136,7 +136,7 @@ async function onSummarize() {
   summarizing.value = true
   try {
     if (imageList.length) {
-      // 多图 → 识图拆卡:每张图识别成一张卡片草稿
+      // 有图 → 识图拆卡:每张图可拆出多张卡片草稿
       const results = await summarizeMany(
         imageList,
         text,
@@ -156,12 +156,17 @@ async function onSummarize() {
         aiError.value = 'AI 未返回可识别的卡片内容'
       }
     } else {
-      const result = await summarizeKnowledge(text, props.aiConfig, platformFetch)
+      // 无图 → 文本拆卡:一段文字也可能包含多个独立知识点,拆成多张草稿
+      const result = await summarizeKnowledgeMany(text, props.aiConfig, platformFetch)
       if (result.ok) {
-        front.value = result.data.front
-        back.value = result.data.back
-        if (result.data.keywords.length) {
-          const merged = new Set([...parsedTags.value, ...result.data.keywords])
+        drafts.value = result.data.map((card) => ({
+          imageUri: '',
+          front: card.front,
+          back: card.back,
+          keywords: card.keywords,
+        }))
+        if (result.data[0]?.keywords.length) {
+          const merged = new Set([...parsedTags.value, ...result.data[0].keywords])
           tagsText.value = [...merged].join(' ')
         }
         aiDone.value = true
@@ -299,7 +304,7 @@ function onKeydown(e: KeyboardEvent) {
                   stroke-linejoin="round"
                 />
               </svg>
-              {{ summarizing ? summarizeProgress || '归纳中…' : images.length > 1 ? `AI 识图拆卡 (${images.length})` : 'AI 归纳' }}
+              {{ summarizing ? summarizeProgress || '归纳中…' : images.length ? `AI 识图拆卡 (${images.length})` : 'AI 归纳(拆卡)' }}
             </button>
 
             <span v-if="aiDone" class="done-tag">已归纳</span>

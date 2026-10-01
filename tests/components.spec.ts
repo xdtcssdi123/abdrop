@@ -144,6 +144,18 @@ describe('ComposeSheet 识图拆卡(多图 → 多卡)', () => {
     } as unknown as Response
   }
 
+  /** 多卡响应:AI 返回卡片数组。 */
+  function aiMany(...cards: Array<{ front: string; back: string }>) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify(cards) } }],
+      }),
+      text: async () => '',
+    } as unknown as Response
+  }
+
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -234,5 +246,44 @@ describe('ComposeSheet 识图拆卡(多图 → 多卡)', () => {
 
     expect(w.findAll('.draft')).toHaveLength(0)
     expect(w.text()).toContain('识别失败')
+  })
+
+  it('一张图拆成多张卡:单图多卡草稿,保存时逐张入库', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(aiMany(
+        { front: '要点一', back: '答案一' },
+        { front: '要点二', back: '答案二' },
+        { front: '要点三', back: '答案三' },
+      ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const w = mount(ComposeSheet, {
+      props: { open: true, collections, activeCollectionId: 'inbox', aiConfig: aiCfg },
+    })
+    await flushPromises()
+
+    // 只选一张图
+    ;(w.vm as any).images = ['data:image/png;base64,AAA']
+    await flushPromises()
+    expect(w.findAll('.img-cell')).toHaveLength(1)
+
+    await w.findAll('.ghost-btn')[1]!.trigger('click')
+    await flushPromises()
+
+    // 一次请求,却拆出 3 张草稿
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(w.findAll('.draft')).toHaveLength(3)
+    expect(w.text()).toContain('识别出的卡片(3)')
+    expect(w.find('.save-btn').text()).toContain('保存 3 张卡片')
+
+    // 保存 → 3 个 save 事件,共用同一张图
+    await w.find('.save-btn').trigger('click')
+    await flushPromises()
+    const saves = w.emitted('save')!
+    expect(saves).toHaveLength(3)
+    expect(saves[0]![0]).toMatchObject({ imageUri: 'data:image/png;base64,AAA', front: '要点一' })
+    expect(saves[1]![0]).toMatchObject({ imageUri: 'data:image/png;base64,AAA', front: '要点二' })
+    expect(saves[2]![0]).toMatchObject({ imageUri: 'data:image/png;base64,AAA', front: '要点三' })
   })
 })

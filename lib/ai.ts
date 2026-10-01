@@ -74,6 +74,26 @@ JSON 结构:
 - 若原文是陈述句,把其中可考察的核心转成问题放进 front。
 - 语言与原文一致。`
 
+/** 多卡系统提示词 —— 输出 JSON **数组**,每项一张卡片(「拆卡」用)。 */
+export const SYSTEM_PROMPT_MULTI = `你是一个知识卡片整理助手,输出用于间隔重复记忆系统的问答卡片(Anki 风格)。
+用户会给你一段知识点原文或一张图片,其中**可能包含多个独立知识点**。
+请把它拆成若干张卡片(一个知识点一张),只输出 JSON 数组,不要任何解释文字,不要 markdown 代码块。
+
+JSON 结构(数组,1~8 张):
+[
+  {
+    "front": "卡片正面。一句简洁的问题或知识点标题,能独立引发回忆,不超过 40 字",
+    "back": "卡片背面。准确、完整的答案或解释,可分点,用换行分隔,不超过 200 字",
+    "keywords": ["3-6 个关键词"]
+  }
+]
+
+要求:
+- 每个独立知识点拆一张卡;只有一个知识点时输出一张卡的数组。
+- 忠于原文,不编造事实;原文含糊时按最合理的通行理解补全。
+- 若知识点本身是一问一答,直接拆成 front/back;若是陈述句,把可考察的核心转成问题放进 front。
+- 语言与原文一致。`
+
 /** 一次请求的完整描述,便于单测断言。 */
 export interface AIRequestPlan {
   url: string
@@ -136,7 +156,12 @@ function anthropicUserContent(rawText: string, imageUrl: string): string | Array
 }
 
 /** 构造 AI 请求计划(纯函数)。imageUrl 传入可识别图片(dataURL)。 */
-export function buildRequest(rawText: string, config: AIConfig, imageUrl = ''): AIRequestPlan {
+export function buildRequest(
+  rawText: string,
+  config: AIConfig,
+  imageUrl = '',
+  systemPrompt: string = SYSTEM_PROMPT,
+): AIRequestPlan {
   const base = effectiveBaseUrl(config)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -153,8 +178,8 @@ export function buildRequest(rawText: string, config: AIConfig, imageUrl = ''): 
       headers,
       body: JSON.stringify({
         model: config.model,
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
+        max_tokens: 2048,
+        system: systemPrompt,
         messages: [{ role: 'user', content: anthropicUserContent(rawText, imageUrl) }],
       }),
     }
@@ -169,7 +194,7 @@ export function buildRequest(rawText: string, config: AIConfig, imageUrl = ''): 
       model: config.model,
       temperature: 0.2,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: openAIUserContent(rawText, imageUrl) },
       ],
     }),
@@ -207,22 +232,92 @@ export function parseAIResponse(payload: unknown): AISummary {
   if (!parsed || typeof parsed !== 'object') {
     return nonJSONFallback(text)
   }
+  return parseCardObject(parsed, text)
+}
 
-  const obj = parsed as Record<string, unknown>
+/** 从任意对象里抽取卡片三要素(纯函数)。 */
+export function parseCardObject(obj: unknown, fallbackText: string): AISummary {
+  const o = obj as Record<string, unknown>
   const front = asString(
-    obj.front ?? obj.question ?? obj.正面 ?? obj.问题 ?? obj.title ?? obj.summary,
+    o.front ?? o.question ?? o.正面 ?? o.问题 ?? o.title ?? o.summary,
   )
   const back = asString(
-    obj.back ?? obj.answer ?? obj.背面 ?? obj.答案 ?? obj.explanation ?? obj.content,
+    o.back ?? o.answer ?? o.背面 ?? o.答案 ?? o.explanation ?? o.content,
   )
-  const keywords = asStringArray(obj.keywords ?? obj.关键词 ?? obj.tags)
-
+  const keywords = asStringArray(o.keywords ?? o.关键词 ?? o.tags)
   return {
     // 正面兜底:取背面首句,至少保证卡片两侧都有内容
-    front: front || firstLine(back) || text.trim(),
-    back: back || text.trim(),
+    front: front || firstLine(back) || fallbackText.trim(),
+    back: back || fallbackText.trim(),
     keywords,
   }
+}
+
+/** 从可能带 markdown 围栏的文本中抠出 JSON **数组**串(多卡拆卡用)。 */
+export function extractJSONArrayString(text: string): string {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const candidate = (fenced?.[1] ?? text).trim()
+  const start = candidate.indexOf('[')
+  const end = candidate.lastIndexOf(']')
+  if (start === -1 || end === -1 || end <= start) return candidate
+  return candidate.slice(start, end + 1)
+}
+
+/**
+ * 解析 AI 原始响应 → 卡片**数组**(拆卡用)。
+ * 兼容:顶层 JSON 数组 / { cards: [...] } 包装 / 单个对象(当作一张)/
+ *      纯文本兜底。
+ */
+export function parseAIResponseMany(payload: unknown): AISummary[] {
+  const text = extractText(payload)
+  if (!text) return [{ front: '', back: '', keywords: [] }]
+
+  // 先按对象/包装解析(兼容 { cards: [...] } 与单对象 —— 对象里的嵌套数组
+  // 如 keywords:[...] 不会被误当成顶层数组);
+  // 失败再按顶层数组解析。
+  let parsed: unknown = null
+  try {
+    parsed = JSON.parse(extractJSONString(text))
+  } catch {
+    try {
+      parsed = JSON.parse(extractJSONArrayString(text))
+    } catch {
+      // 模型没吐 JSON —— 整段当背面兜底成一张
+      return [nonJSONFallback(text)]
+    }
+  }
+
+  // 顶层数组
+  if (Array.isArray(parsed)) {
+    const cards = parsed
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const card = parseCardObject(item, text)
+        // 空卡片剔除(只输出数组壳时)
+        return card.front || card.back ? card : null
+      })
+      .filter((c): c is AISummary => c !== null)
+    return cards.length ? cards : [nonJSONFallback(text)]
+  }
+
+  // { cards: [...] } 包装 / 单对象
+  if (parsed && typeof parsed === 'object') {
+    const wrapped = (parsed as Record<string, unknown>).cards
+    if (Array.isArray(wrapped)) {
+      const cards = wrapped
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null
+          const card = parseCardObject(item, text)
+          return card.front || card.back ? card : null
+        })
+        .filter((c): c is AISummary => c !== null)
+      if (cards.length) return cards
+    }
+    // 单个对象 → 一张
+    return [parseCardObject(parsed, text)]
+  }
+
+  return [nonJSONFallback(text)]
 }
 
 /** 取首行/首句作为正面兜底。 */
@@ -372,16 +467,16 @@ export async function listModels(
   }
 }
 
-/** 单张图片的识别结果。 */
+/** 单张图片的识别结果(拆卡:每张图可能产出多张卡)。 */
 export type ImageSummaryResult =
-  | { imageUri: string; ok: true; data: AISummary }
+  | { imageUri: string; ok: true; data: AISummary[] }
   | { imageUri: string; ok: false; error: string }
 
 /**
  * 多图逐张识别(「AI 识图拆卡」)。
  *
- * 顺序执行(避免触发网关限流),单张失败不中断其余;每张图返回独立结果,
- * 由调用方决定生成几张卡片、失败如何提示。
+ * 顺序执行(避免触发网关限流),单张失败不中断其余;
+ * 每张图可能拆出多张卡(一图多卡),由调用方决定如何落库、失败如何提示。
  */
 export async function summarizeMany(
   images: readonly string[],
@@ -393,7 +488,7 @@ export async function summarizeMany(
   const out: ImageSummaryResult[] = []
   for (let i = 0; i < images.length; i++) {
     const uri = images[i]!
-    const result = await summarizeKnowledge(rawText, config, fetchImpl, uri)
+    const result = await summarizeKnowledgeMany(rawText, config, fetchImpl, uri)
     out.push(
       result.ok
         ? { imageUri: uri, ok: true, data: result.data }
@@ -404,7 +499,7 @@ export async function summarizeMany(
   return out
 }
 
-/** 拆卡草稿:一张图对应一张卡片。 */
+/** 拆卡草稿:一张卡片(可能多张共用同一张图)。 */
 export interface CardDraft {
   imageUri: string
   front: string
@@ -414,7 +509,7 @@ export interface CardDraft {
 
 /**
  * 把逐图识别结果整理成卡片草稿(纯函数)。
- * 识别成功的进 drafts(正面兜底用 fallbackFront),失败的单独列出。
+ * 识别成功的**每张卡**都进 drafts(同图多卡逐张展开),失败的单独列出。
  */
 export function draftsFromImageResults(
   results: readonly ImageSummaryResult[],
@@ -424,12 +519,14 @@ export function draftsFromImageResults(
   const failed: Array<{ imageUri: string; error: string }> = []
   for (const r of results) {
     if (r.ok) {
-      drafts.push({
-        imageUri: r.imageUri,
-        front: r.data.front || firstLine(fallbackFront) || '未识别内容',
-        back: r.data.back,
-        keywords: r.data.keywords,
-      })
+      for (const card of r.data) {
+        drafts.push({
+          imageUri: r.imageUri,
+          front: card.front || firstLine(fallbackFront) || '未识别内容',
+          back: card.back,
+          keywords: card.keywords,
+        })
+      }
     } else {
       failed.push({ imageUri: r.imageUri, error: r.error })
     }
@@ -438,7 +535,7 @@ export function draftsFromImageResults(
 }
 
 /**
- * 调用 AI 归纳。
+ * 调用 AI 归纳(单卡)。
  * 永不抛异常 —— 失败返回 `{ ok:false, error }`,由 UI 决定是否提示。
  *
  * @param imageUrl 可选的图片 dataURL;传入后以多模态发给模型。
@@ -450,13 +547,64 @@ export async function summarizeKnowledge(
   fetchImpl: typeof fetch = fetch,
   imageUrl = '',
 ): Promise<SummarizeResult> {
-  if (!rawText.trim() && !imageUrl) return { ok: false, error: '原文为空' }
-  if (!config.enabled) return { ok: false, error: 'AI 未启用' }
-  if (!config.apiKey.trim()) return { ok: false, error: '未配置 API Key' }
-  if (!normalizeBaseUrl(config.baseUrl)) return { ok: false, error: '未配置接口地址' }
-  if (!config.model.trim()) return { ok: false, error: '未配置模型名' }
+  const guard = summarizeGuard(rawText, imageUrl, config)
+  if (guard) return guard
 
   const plan = buildRequest(rawText, config, imageUrl)
+  return runAIRequest(plan, config, (payload) => {
+    const data = parseAIResponse(payload)
+    return data.front || data.back ? { ok: true as const, data } : { ok: false as const, error: 'AI 返回内容为空' }
+  }, fetchImpl)
+}
+
+/** 多卡归纳结果。 */
+export type SummarizeManyResult =
+  | { ok: true; data: AISummary[] }
+  | { ok: false; error: string }
+
+/**
+ * 调用 AI 归纳(多卡拆卡)。
+ * 一张图 / 一段文本可拆成多张卡;失败返回 error,永不抛异常。
+ */
+export async function summarizeKnowledgeMany(
+  rawText: string,
+  config: AIConfig,
+  fetchImpl: typeof fetch = fetch,
+  imageUrl = '',
+): Promise<SummarizeManyResult> {
+  const guard = summarizeGuard(rawText, imageUrl, config)
+  if (guard) return guard
+
+  const plan = buildRequest(rawText, config, imageUrl, SYSTEM_PROMPT_MULTI)
+  return runAIRequest(plan, config, (payload) => {
+    const cards = parseAIResponseMany(payload).filter((c) => c.front || c.back)
+    return cards.length
+      ? { ok: true as const, data: cards }
+      : { ok: false as const, error: 'AI 返回内容为空' }
+  }, fetchImpl)
+}
+
+/** 归纳前置校验,返回错误时立即短路;通过返回 null。 */
+function summarizeGuard<R extends { ok: false; error: string }>(
+  rawText: string,
+  imageUrl: string,
+  config: AIConfig,
+): R | null {
+  if (!rawText.trim() && !imageUrl) return { ok: false, error: '原文为空' } as R
+  if (!config.enabled) return { ok: false, error: 'AI 未启用' } as R
+  if (!config.apiKey.trim()) return { ok: false, error: '未配置 API Key' } as R
+  if (!normalizeBaseUrl(config.baseUrl)) return { ok: false, error: '未配置接口地址' } as R
+  if (!config.model.trim()) return { ok: false, error: '未配置模型名' } as R
+  return null
+}
+
+/** 执行一次 AI 请求并统一错误处理,响应交给解析回调。 */
+async function runAIRequest<T>(
+  plan: AIRequestPlan,
+  config: AIConfig,
+  parse: (payload: unknown) => { ok: true; data: T } | { ok: false; error: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), config.timeoutMs)
 
@@ -474,9 +622,7 @@ export async function summarizeKnowledge(
     }
 
     const payload = await res.json()
-    const data = parseAIResponse(payload)
-    if (!data.front && !data.back) return { ok: false, error: 'AI 返回内容为空' }
-    return { ok: true, data }
+    return parse(payload)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (/abort/i.test(msg)) return { ok: false, error: `请求超时(${config.timeoutMs}ms)` }

@@ -16,6 +16,7 @@ import {
   listModels,
   normalizeBaseUrl,
   parseAIResponse,
+  parseAIResponseMany,
   parseDataUrl,
   summarizeKnowledge,
   summarizeMany,
@@ -211,6 +212,40 @@ describe('响应解析', () => {
   it('合法但没有可用字段的 JSON 回落到原文', () => {
     const out = parseAIResponse(openAIPayload('{"foo":1}'))
     expect(out.back).toBe('{"foo":1}')
+  })
+
+  it('多卡:解析顶层 JSON 数组为多张卡', () => {
+    const out = parseAIResponseMany(
+      openAIPayload('[{"front":"Q1","back":"A1","keywords":["k1"]},{"front":"Q2","back":"A2"}]'),
+    )
+    expect(out).toHaveLength(2)
+    expect(out[0]).toMatchObject({ front: 'Q1', back: 'A1', keywords: ['k1'] })
+    expect(out[1]).toMatchObject({ front: 'Q2', back: 'A2' })
+  })
+
+  it('多卡:兼容单对象响应(当作一张卡)', () => {
+    const out = parseAIResponseMany(openAIPayload('{"front":"Q","back":"A","keywords":["k"]}'))
+    expect(out).toHaveLength(1)
+    expect(out[0]!.front).toBe('Q')
+  })
+
+  it('多卡:兼容 { cards: [...] } 包装', () => {
+    const out = parseAIResponseMany(
+      openAIPayload('{"cards":[{"front":"Q1","back":"A1"},{"front":"Q2","back":"A2"}]}'),
+    )
+    expect(out).toHaveLength(2)
+  })
+
+  it('多卡:空数组兜底成一张(整段原文)', () => {
+    const out = parseAIResponseMany(openAIPayload('[]'))
+    expect(out).toHaveLength(1)
+    expect(out[0]!.back).toBe('[]')
+  })
+
+  it('多卡:非 JSON 兜底成一张,不丢内容', () => {
+    const out = parseAIResponseMany(openAIPayload('这是一段纯文本解释'))
+    expect(out).toHaveLength(1)
+    expect(out[0]!.back).toBe('这是一段纯文本解释')
   })
 })
 
@@ -427,15 +462,17 @@ describe('groupModels —— 模型分组', () => {
 describe('summarizeMany —— 多图逐张识别(识图拆卡)', () => {
   const imgs = ['data:image/png;base64,AAA', 'data:image/png;base64,BBB', 'data:image/png;base64,CCC']
 
-  it('逐张调用并返回每张的结果(含图片地址)', async () => {
+  it('逐张调用并返回每张的结果(含图片地址,一图多卡)', async () => {
     const fetchImpl = fakeFetch(
-      openAIPayload('{"front":"Q1","back":"A1","keywords":["k"]}'),
+      openAIPayload('[{"front":"Q1","back":"A1","keywords":["k"]},{"front":"Q1b","back":"A1b"}]'),
     )
     const results = await summarizeMany(imgs.slice(0, 2), '原文', config(), fetchImpl)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
     expect(results).toHaveLength(2)
     expect(results[0]).toMatchObject({ imageUri: imgs[0], ok: true })
-    expect(results[0].ok && results[0].data.front).toBe('Q1')
+    // 一图多卡:data 是卡片数组
+    expect(results[0].ok && results[0].data[0]!.front).toBe('Q1')
+    expect(results[0].ok && results[0].data[1]!.front).toBe('Q1b')
     expect(results[1]).toMatchObject({ imageUri: imgs[1], ok: true })
   })
 
@@ -473,19 +510,23 @@ describe('summarizeMany —— 多图逐张识别(识图拆卡)', () => {
 })
 
 describe('draftsFromImageResults —— 识别结果整理成卡片草稿', () => {
-  it('成功的进草稿,正面对兜底,失败的单独列出', () => {
+  it('成功的进草稿(一图多卡逐张展开),正面对兜底,失败的单独列出', () => {
     const { drafts, failed } = draftsFromImageResults(
       [
-        { imageUri: 'img-a', ok: true, data: { front: 'A盘是什么', back: '…', keywords: ['a'] } },
+        { imageUri: 'img-a', ok: true, data: [
+          { front: 'A盘是什么', back: '…', keywords: ['a'] },
+          { front: '', back: '只有背', keywords: [] },
+        ] },
         { imageUri: 'img-b', ok: false, error: 'HTTP 429' },
-        { imageUri: 'img-c', ok: true, data: { front: '', back: '只有背' , keywords: [] } },
+        { imageUri: 'img-c', ok: true, data: [{ front: 'C', back: '…', keywords: [] }] },
       ],
       '原文首句',
     )
-    expect(drafts).toHaveLength(2)
+    expect(drafts).toHaveLength(3)
     expect(drafts[0]).toEqual({ imageUri: 'img-a', front: 'A盘是什么', back: '…', keywords: ['a'] })
-    // 正面为空 → 用兜底
+    // 正面为空 → 用兜底(同图第二张)
     expect(drafts[1]?.front).toBe('原文首句')
+    expect(drafts[2]).toEqual({ imageUri: 'img-c', front: 'C', back: '…', keywords: [] })
     expect(failed).toEqual([{ imageUri: 'img-b', error: 'HTTP 429' }])
   })
 
