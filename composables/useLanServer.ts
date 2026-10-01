@@ -15,14 +15,19 @@ import { useAIConfigState, useCollections } from '~/composables/useAppState'
 import { useCheckinState } from '~/composables/useCheckinState'
 import { getFullscreenPreference, setFullscreenPreference, isNativePlatform } from '~/composables/useNativeBridge'
 import { APP_VERSION } from '~/lib/update'
+import {
+  readAIConfigFromStorage,
+  readActiveCollectionFromStorage,
+  readCheckinConfigFromStorage,
+} from '~/lib/lan-config'
 
 /** 端口持久化键。 */
 export const LAN_PORT_KEY = 'abdrop.lan.port'
 
 export function useLanServer() {
   const repo = useCardRepository()
-  const { aiConfig, load: loadAIConfig, save: saveAIConfig } = useAIConfigState()
-  const { activeCollectionId, select } = useCollections()
+  const { save: saveAIConfig } = useAIConfigState()
+  const { select } = useCollections()
   const checkin = useCheckinState()
 
   /** 是否正在运行(以原生返回为准)。 */
@@ -59,13 +64,16 @@ export function useLanServer() {
     return {
       repo,
       version: APP_VERSION,
-      getAIConfig: async () => ({ ...aiConfig.value }),
+      // 配置一律读持久化存储(localStorage),而非内存 state:
+      // Web 服务请求到来时 App 可能处于"从未打开设置页"的状态,内存里只有默认值;
+      // localStorage 才是软件配置真正的落盘处,保证网页看到的 = 软件里存的。
+      getAIConfig: () => Promise.resolve(readAIConfigFromStorage()),
       saveAIConfig: (cfg) => saveAIConfig(cfg),
-      getActiveCollectionId: async () => activeCollectionId.value,
+      getActiveCollectionId: () => Promise.resolve(readActiveCollectionFromStorage()),
       setActiveCollectionId: async (id) => {
         select(id)
       },
-      getCheckinConfig: async () => ({ ...checkin.config.value }),
+      getCheckinConfig: () => Promise.resolve(readCheckinConfigFromStorage()),
       saveCheckinConfig: (cfg) => checkin.updateConfig(cfg),
       getFullscreenPreference,
       setFullscreenPreference,

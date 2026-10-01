@@ -1198,7 +1198,7 @@ describe('设置页页面集成', () => {
     const w = await mountSettings()
     const head = w.findAll('.panel__head')[3]!
     expect(head.text()).toContain('检查更新')
-    expect(head.text()).toContain('v1.1.0')
+    expect(head.text()).toContain('v1.1.1')
     // 默认收起
     expect(w.findAll('.panel__body')).toHaveLength(0)
   })

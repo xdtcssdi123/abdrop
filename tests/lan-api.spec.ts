@@ -23,7 +23,7 @@ function makeDeps(overrides: Partial<LanApiDeps> = {}): LanApiDeps {
   let fullscreen = false
   return {
     repo,
-    version: '1.1.0',
+    version: '1.1.1',
     getAIConfig: async () => ({ ...ai }),
     saveAIConfig: async (cfg) => {
       ai = { ...cfg }
@@ -98,7 +98,7 @@ describe('handleLanRequest', () => {
     const data = JSON.parse(r.body)
     expect(r.status).toBe(200)
     expect(data.ok).toBe(true)
-    expect(data.version).toBe('1.1.0')
+    expect(data.version).toBe('1.1.1')
     expect(data.cards).toBe(1)
     expect(data.collections).toBeGreaterThanOrEqual(1)
   })
