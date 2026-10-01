@@ -158,12 +158,12 @@ describe('首页页面集成', () => {
     const w = await mountHome()
 
     // 单击顶卡 → 全屏答案层出现,展示背面(单击有 280ms 双击窗口,需等待)
-    await w.find('.stack').trigger('touchstart', {
+    await w.find('.stack__drag').trigger('touchstart', {
       touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
     } as any)
-    await w.find('.stack').trigger('touchend', {
+    await w.find('.stack__drag').trigger('touchend', {
       touches: [],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
@@ -181,18 +181,71 @@ describe('首页页面集成', () => {
     expect(w.find('.answer').exists()).toBe(false)
   })
 
+  it('点卡片外空白不打开全屏答案层', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: 'Q', back: 'A' })
+    const w = await mountHome()
+
+    // 在堆叠空白处(.stack 本身,非卡片)单击
+    await w.find('.stack').trigger('touchstart', {
+      touches: [{ clientX: 20, clientY: 700, identifier: 0 }],
+      changedTouches: [{ clientX: 20, clientY: 700, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 20, clientY: 700, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    // 等过双击窗口
+    await new Promise((r) => setTimeout(r, 320))
+    await settle(2)
+
+    expect(w.find('.answer').exists()).toBe(false)
+  })
+
+  it('空白处横向滑动不带动卡片(不跟手、不提交)', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: 'Q', back: 'A' })
+    const w = await mountHome()
+    expect(w.text()).toContain('Q')
+
+    // 在堆叠空白处(.stack 本身,非卡片)做大幅横向滑动
+    await w.find('.stack').trigger('touchstart', {
+      touches: [{ clientX: 20, clientY: 700, identifier: 0 }],
+      changedTouches: [{ clientX: 20, clientY: 700, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchmove', {
+      touches: [{ clientX: 700, clientY: 701, identifier: 0 }],
+      changedTouches: [{ clientX: 700, clientY: 701, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 700, clientY: 701, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await settle(5)
+
+    // 卡片未提交:仍显示在首页,复习事件未被触发
+    expect(w.text()).toContain('Q')
+    expect(w.text()).not.toContain('暂无待复习卡片')
+    expect(w.findComponent({ name: 'CardStack' }).emitted('review')).toBeUndefined()
+  })
+
   it('Android 返回键事件关闭全屏答案层(不再误判退出)', async () => {
     const repo = useCardRepository()
     await repo.addCard({ front: 'Q', back: 'A' })
     const w = await mountHome()
 
     // 打开全屏答案
-    await w.find('.stack').trigger('touchstart', {
+    await w.find('.stack__drag').trigger('touchstart', {
       touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
     } as any)
-    await w.find('.stack').trigger('touchend', {
+    await w.find('.stack__drag').trigger('touchend', {
       touches: [],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
@@ -213,12 +266,12 @@ describe('首页页面集成', () => {
     await repo.addCard({ front: 'Q', back: 'A' })
     const w = await mountHome()
 
-    await w.find('.stack').trigger('touchstart', {
+    await w.find('.stack__drag').trigger('touchstart', {
       touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
     } as any)
-    await w.find('.stack').trigger('touchend', {
+    await w.find('.stack__drag').trigger('touchend', {
       touches: [],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
@@ -239,12 +292,12 @@ describe('首页页面集成', () => {
     const w = await mountHome()
 
     // 打开全屏答案
-    await w.find('.stack').trigger('touchstart', {
+    await w.find('.stack__drag').trigger('touchstart', {
       touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
     } as any)
-    await w.find('.stack').trigger('touchend', {
+    await w.find('.stack__drag').trigger('touchend', {
       touches: [],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
@@ -280,12 +333,12 @@ describe('首页页面集成', () => {
     await repo.addCard({ front: 'Q', back: 'A' })
     const w = await mountHome()
 
-    await w.find('.stack').trigger('touchstart', {
+    await w.find('.stack__drag').trigger('touchstart', {
       touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
     } as any)
-    await w.find('.stack').trigger('touchend', {
+    await w.find('.stack__drag').trigger('touchend', {
       touches: [],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
@@ -322,12 +375,12 @@ describe('首页页面集成', () => {
     expect(w.text()).toContain('什么是导数')
 
     // 打开全屏答案
-    await w.find('.stack').trigger('touchstart', {
+    await w.find('.stack__drag').trigger('touchstart', {
       touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
     } as any)
-    await w.find('.stack').trigger('touchend', {
+    await w.find('.stack__drag').trigger('touchend', {
       touches: [],
       changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
       preventDefault: () => {},
@@ -353,9 +406,9 @@ describe('首页页面集成', () => {
       changedTouches: [{ clientX: 700, clientY: 301, identifier: 0 }],
       preventDefault: () => {}, stopPropagation: () => {},
     } as any)
-    // 滑出动画 + 超时兜底最多约 380ms,sleep 真等动画完成再断言
-    await new Promise((r) => setTimeout(r, 450))
-    await settle(2)
+    // 答案层滑出动画(260ms)+ commitSwipe 飞出动画(260ms)+ 超时兜底,等待放宽到 800ms
+    await new Promise((r) => setTimeout(r, 800))
+    await settle(3)
 
     // 全屏关闭且复习已提交(卡池引用变化)
     expect(w.find('.answer').exists()).toBe(false)
@@ -952,11 +1005,12 @@ describe('设置页页面集成', () => {
   it('只保留核心功能面板,无冗余入口', async () => {
     const w = await mountSettings()
     const heads = w.findAll('.panel__head').map((h) => h.text())
-    expect(heads).toHaveLength(4)
+    expect(heads).toHaveLength(5)
     expect(heads[0]).toContain('全屏沉浸')
-    expect(heads[1]).toContain('AI 接口配置')
-    expect(heads[2]).toContain('合集管理')
-    expect(heads[3]).toContain('数据导入导出')
+    expect(heads[1]).toContain('检查更新')
+    expect(heads[2]).toContain('AI 接口配置')
+    expect(heads[3]).toContain('合集管理')
+    expect(heads[4]).toContain('数据导入导出')
   })
 
   it('显示卡片总数', async () => {
@@ -989,7 +1043,7 @@ describe('设置页页面集成', () => {
     await repo.createCollection('数学')
 
     const w = await mountSettings()
-    await w.findAll('.panel__head')[2]!.trigger('click')
+    await w.findAll('.panel__head')[3]!.trigger('click')
     await settle()
 
     expect(w.text()).toContain('未分类')
@@ -998,7 +1052,7 @@ describe('设置页页面集成', () => {
 
   it('默认合集不提供删除按钮(不能删掉唯一的兜底合集)', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[2]!.trigger('click')
+    await w.findAll('.panel__head')[3]!.trigger('click')
     await settle()
 
     const items = w.findAll('.list__item')
@@ -1009,12 +1063,12 @@ describe('设置页页面集成', () => {
 
   it('展开数据面板时提供 Anki 导入与导出入口', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[3]!.trigger('click')
+    await w.findAll('.panel__head')[4]!.trigger('click')
     await settle()
 
     expect(w.text()).toContain('导入 Anki 文件')
     expect(w.text()).toContain('导出 Anki TSV')
-    expect(w.text()).toContain('保存配置(含卡片与复习进度)')
+    expect(w.text()).toContain('备份全部数据(zip)')
   })
 
   it('全屏沉浸面板可展开,切换开关持久化偏好', async () => {
@@ -1038,7 +1092,7 @@ describe('设置页页面集成', () => {
 
   it('AI 面板切换服务商时自动填充默认地址与模型', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[1]!.trigger('click')
+    await w.findAll('.panel__head')[2]!.trigger('click')
     await settle()
 
     const chips = w.findAll('.chips .chip')
@@ -1092,7 +1146,7 @@ describe('设置页页面集成', () => {
     const math = await repo.createCollection('数学')
     const w = await mountSettings()
 
-    await w.findAll('.panel__head')[2]!.trigger('click')
+    await w.findAll('.panel__head')[3]!.trigger('click')
     await settle()
 
     const opts = w.findAll('.scope-opt')
@@ -1137,5 +1191,83 @@ describe('设置页页面集成', () => {
     await w.find('.checkin-panel__head').trigger('click')
     await settle()
     expect(bodyEl().style.display).toBe('none')
+  })
+
+  it('检查更新:面板存在且显示本地版本', async () => {
+    const w = await mountSettings()
+    const head = w.findAll('.panel__head')[1]!
+    expect(head.text()).toContain('检查更新')
+    expect(head.text()).toContain('v1.0')
+    // 默认收起
+    expect(w.findAll('.panel__body')).toHaveLength(0)
+  })
+
+  it('检查更新:发现新版本时提示下载 APK', async () => {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          tag_name: 'v1.1.0',
+          name: 'v1.1.0',
+          body: '新版本更新说明',
+          published_at: '2026-10-01T00:00:00Z',
+          html_url: 'https://github.com/xdtcssdi123/abdrop/releases/tag/v1.1.0',
+          assets: [
+            {
+              name: 'ABDrop-1.1.0-release.apk',
+              size: 6_000_000,
+              browser_download_url: 'https://github.com/xdtcssdi123/abdrop/releases/download/v1.1.0/ABDrop-1.1.0-release.apk',
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ) as Response
+    try {
+      const w = await mountSettings()
+      const head = w.findAll('.panel__head')[1]!
+      await head.trigger('click')
+      await settle()
+
+      const checkBtn = w.findAll('.btn')[0]!
+      await checkBtn.trigger('click')
+      await settle()
+
+      expect(w.text()).toContain('新版本 v1.1.0 可用')
+      expect(w.text()).toContain('下载并安装')
+      expect(w.text()).toContain('ABDrop-1.1.0-release.apk')
+      // 面板 meta 同步显示新版本
+      expect(head.text()).toContain('发现新版本 v1.1.0')
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
+  it('检查更新:无更新时显示已是最新', async () => {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          tag_name: 'v1.0',
+          name: 'v1.0',
+          body: '',
+          published_at: '2026-09-30T00:00:00Z',
+          html_url: 'https://github.com/xdtcssdi123/abdrop/releases/tag/v1.0',
+          assets: [],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ) as Response
+    try {
+      const w = await mountSettings()
+      const head = w.findAll('.panel__head')[1]!
+      await head.trigger('click')
+      await settle()
+
+      await w.findAll('.btn')[0]!.trigger('click')
+      await settle()
+
+      expect(w.text()).toContain('已是最新版本')
+    } finally {
+      globalThis.fetch = realFetch
+    }
   })
 })

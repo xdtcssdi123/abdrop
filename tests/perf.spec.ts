@@ -75,7 +75,7 @@ describe('跟手写入的 rAF 节流', () => {
 
   it('同一帧内多次 touchmove 只产生一次渲染写入', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     // 一帧内连发 5 次移动(每次 20px,共 100px)
@@ -98,7 +98,7 @@ describe('跟手写入的 rAF 节流', () => {
 
   it('抬手时先落定挂起的帧,判定基于最新位移而非旧值', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     // 一次大幅移动(超过 1/3 屏 = 130px),但**不**推进 rAF
@@ -116,7 +116,7 @@ describe('跟手写入的 rAF 节流', () => {
 
   it('未达阈值时抬手不提交,而是回弹', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(40, 400) as any)
@@ -127,7 +127,7 @@ describe('跟手写入的 rAF 节流', () => {
 
   it('左滑同样基于最新位移判定', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(200, 400) as any)
     await stack.trigger('touchmove', touchEvent(0, 400) as any)
@@ -140,7 +140,7 @@ describe('跟手写入的 rAF 节流', () => {
 
   it('touchcancel 也落定挂起的帧', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(80, 400) as any)
@@ -168,7 +168,7 @@ describe('回弹动画与响应式 transform 不互相覆盖', () => {
 
   it('回弹期间位移被冻结(不归零),动画结束后才复位', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(50, 400) as any)
@@ -189,7 +189,7 @@ describe('回弹动画与响应式 transform 不互相覆盖', () => {
   it('飞出后抑制状态被解除,下一次滑动仍能跟手', async () => {
     const cards = makeCards(3)
     const w = mountStack(cards)
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(200, 400) as any)
@@ -204,9 +204,10 @@ describe('回弹动画与响应式 transform 不互相覆盖', () => {
     await vi.advanceTimersByTimeAsync(600)
     await nextTick()
 
-    // 再次拖动应能写入 transform
-    await stack.trigger('touchstart', touchEvent(0, 400) as any)
-    await stack.trigger('touchmove', touchEvent(80, 400) as any)
+    // 再次拖动应能写入 transform(新卡上位后重新取元素,旧元素已卸载)
+    const fresh = w.find('.stack__drag')
+    await fresh.trigger('touchstart', touchEvent(0, 400) as any)
+    await fresh.trigger('touchmove', touchEvent(80, 400) as any)
     await vi.advanceTimersByTimeAsync(20)
     await nextTick()
 
@@ -237,7 +238,7 @@ describe('提交时不回弹(直接飞出,不先归位)', () => {
 
   it('【关键】松手提交后,内层位移保持冻结值,不会瞬间归零', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(200, 400) as any)
@@ -257,7 +258,7 @@ describe('提交时不回弹(直接飞出,不先归位)', () => {
 
   it('整个飞出过程中位移单调变化,不出现回跳', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(200, 400) as any)
@@ -279,7 +280,7 @@ describe('提交时不回弹(直接飞出,不先归位)', () => {
 
   it('未达阈值的回弹仍会把位移收回 0(该回则回)', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(60, 400) as any)
@@ -309,7 +310,7 @@ describe('拖动时只有顶层卡片跟手', () => {
 
   it('堆叠层不绑定跟手 transform', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(120, 400) as any)
@@ -327,7 +328,7 @@ describe('拖动时只有顶层卡片跟手', () => {
 
   it('堆叠层在跟手期间始终静止(多个采样点)', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
 
@@ -351,7 +352,7 @@ describe('拖动时只有顶层卡片跟手', () => {
 
   it('顶层仍然跟手(修复不能把跟手也去掉)', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(120, 400) as any)
@@ -396,7 +397,7 @@ describe('落库通知不依赖动画完成', () => {
 
     try {
       const w = mountStack(makeCards(3))
-      const stack = w.find('.stack')
+      const stack = w.find('.stack__drag')
 
       await stack.trigger('touchstart', touchEvent(0, 400) as any)
       await stack.trigger('touchmove', touchEvent(200, 400) as any)

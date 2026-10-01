@@ -15,6 +15,7 @@ import {
   type AnkiParseResult,
 } from '~/lib/anki'
 import { cardToAnkiRow, planAnkiImport } from '~/lib/anki-map'
+import { zipSync, strToU8, strFromU8, unzipSync } from 'fflate'
 import type { CardRepository } from '~/lib/db'
 import type {
   AIConfig,
@@ -125,7 +126,8 @@ function buildDeckNameList(parsed: AnkiParseResult): { names: string[] } {
 /** 导出结果描述。 */
 export interface ExportOutcome {
   filename: string
-  content: string
+  /** 文本导出为字符串;zip 备份为二进制 Uint8Array。 */
+  content: string | Uint8Array
   mime: string
   count: number
 }
@@ -185,35 +187,122 @@ export interface NativeBackupResult extends ImportReport {
   restoredConfig?: AppConfigSnapshot
 }
 
-/** 从原生备份加载(「加载配置」):还原卡片,并解析出配置快照。 */
-export async function importNativeBackup(
-  file: File,
+/** 备份包内 json 的文件名。 */
+export const BACKUP_JSON_NAME = 'abdrop-backup.json'
+/** 备份包内媒体目录前缀。 */
+export const BACKUP_MEDIA_DIR = 'media/'
+
+/**
+ * 从 base64 dataURL 拆出 mime 与二进制,用于把卡片图片外置成独立文件。
+ * 非 dataURL(空/路径)返回 null —— 那些卡没有可外置的图片。
+ */
+function dataUrlToBytes(
+  dataUrl: string,
+): { bytes: Uint8Array; ext: string } | null {
+  const m = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl.trim())
+  if (!m) return null
+  const mime = m[1]!.toLowerCase()
+  const b64 = m[2]!
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  // 常见图片扩展名
+  let ext = 'img'
+  if (mime.includes('png')) ext = 'png'
+  else if (mime.includes('jpeg') || mime.includes('jpg')) ext = 'jpg'
+  else if (mime.includes('gif')) ext = 'gif'
+  else if (mime.includes('webp')) ext = 'webp'
+  return { bytes, ext }
+}
+
+/** 从二进制 + mime 还原 dataURL(导入 zip 时回填卡片图片)。 */
+function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return `data:${mime};base64,${btoa(binary)}`
+}
+
+/**
+ * 导出 zip 备份包(「保存配置」升级版)。
+ *
+ * 包结构:
+ *   abdrop-backup.json   —— 全量数据(config + cards + collections),
+ *                           卡片 imageUri 改为相对路径 media/<id>.<ext>
+ *   media/<id>.<ext>     —— 每张卡的图片独立二进制文件
+ *
+ * 图片外置让包内数据更紧凑、便于人工检视;导入时按路径回填为 dataURL。
+ */
+export async function exportNativeBackupZip(
   repo: CardRepository,
+  config?: AppConfigSnapshot,
+  now: Date = new Date(),
+): Promise<ExportOutcome> {
+  const { cards, collections } = await repo.exportAll()
+  const payload: ExportBundle = {
+    version: 4,
+    exportedAt: now.getTime(),
+    cards,
+    collections,
+  }
+  if (config) payload.config = config
+
+  // 拆出图片,imageUri 改为相对路径
+  const files: Record<string, Uint8Array> = {}
+  payload.cards = cards.map((c) => {
+    if (!c.imageUri) return c
+    const img = dataUrlToBytes(c.imageUri)
+    if (!img) return c
+    files[`${BACKUP_MEDIA_DIR}${c.id}.${img.ext}`] = img.bytes
+    return { ...c, imageUri: `${BACKUP_MEDIA_DIR}${c.id}.${img.ext}` }
+  })
+
+  files[BACKUP_JSON_NAME] = strToU8(JSON.stringify(payload, null, 2))
+  const zipped = zipSync(files, { level: 6 })
+
+  return {
+    filename: ankiExportFilename('abdrop-backup', 'zip', now),
+    content: zipped,
+    mime: 'application/zip',
+    count: cards.length,
+  }
+}
+
+/** 备份 payload 的解析结构。 */
+interface BackupPayloadShape {
+  cards?: KnowledgeCard[]
+  collections?: Collection[]
+  config?: unknown
+}
+
+/**
+ * 从备份 payload 还原卡片并解析配置快照(JSON 与 zip 两条路径共用)。
+ * @param parsed  备份内容(卡片/合集/配置)
+ * @param repo    仓储
+ * @param restoreMedia  (card, id) => 新 card:zip 导入时用媒体回填 imageUri
+ */
+async function importBackupPayload(
+  parsed: BackupPayloadShape,
+  repo: CardRepository,
+  restoreMedia?: (card: KnowledgeCard) => KnowledgeCard,
 ): Promise<NativeBackupResult> {
-  const text = await file.text()
-  let parsed: {
-    cards?: KnowledgeCard[]
-    collections?: Collection[]
-    config?: unknown
-  }
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return { added: 0, skipped: 0, collections: [], warnings: ['备份文件不是合法 JSON'] }
-  }
   if (!Array.isArray(parsed.cards)) {
     return { added: 0, skipped: 0, collections: [], warnings: ['备份文件缺少 cards 字段'] }
   }
   const collections = Array.isArray(parsed.collections) ? parsed.collections : []
   const existing = await repo.existingIds()
   let skipped = 0
-  const fresh = parsed.cards.filter((c) => {
-    if (existing.has(c.id)) {
-      skipped++
-      return false
-    }
-    return true
-  })
+  const fresh = parsed.cards
+    .filter((c) => {
+      if (existing.has(c.id)) {
+        skipped++
+        return false
+      }
+      return true
+    })
+    .map((c) => (restoreMedia ? restoreMedia(c) : c))
   await repo.importAll({ cards: fresh, collections: collections as any })
 
   const result: NativeBackupResult = {
@@ -239,4 +328,75 @@ export async function importNativeBackup(
   }
 
   return result
+}
+
+/** 解包 zip 备份:读 json + media 目录,图片按路径回填 dataURL。 */
+async function importNativeBackupZip(
+  buffer: ArrayBuffer,
+  repo: CardRepository,
+): Promise<NativeBackupResult> {
+  try {
+    const unzipped = unzipSync(new Uint8Array(buffer))
+    const jsonEntry = unzipped[BACKUP_JSON_NAME]
+    if (!jsonEntry) {
+      return { added: 0, skipped: 0, collections: [], warnings: ['zip 备份缺少 abdrop-backup.json'] }
+    }
+    let parsed: BackupPayloadShape
+    try {
+      parsed = JSON.parse(strFromU8(jsonEntry))
+    } catch {
+      return { added: 0, skipped: 0, collections: [], warnings: ['备份内 json 损坏'] }
+    }
+
+    // 媒体回填:imageUri 形如 media/<id>.ext → 读回 base64 dataURL
+    const restoreMedia = (card: KnowledgeCard): KnowledgeCard => {
+      const m = /^media\/(.+)$/.exec(card.imageUri || '')
+      if (!m) return card
+      const bytes = unzipped[`media/${m[1]}`]
+      if (!bytes) return card
+      const mime = m[1]!.endsWith('.png')
+        ? 'image/png'
+        : m[1]!.endsWith('.gif')
+          ? 'image/gif'
+          : m[1]!.endsWith('.webp')
+            ? 'image/webp'
+            : 'image/jpeg'
+      return { ...card, imageUri: bytesToDataUrl(bytes, mime) }
+    }
+
+    const result = await importBackupPayload(parsed, repo, restoreMedia)
+    result.warnings = [...result.warnings, '已识别为 zip 备份包']
+    return result
+  } catch (err) {
+    return {
+      added: 0,
+      skipped: 0,
+      collections: [],
+      warnings: [`解包失败:${err instanceof Error ? err.message : String(err)}`],
+    }
+  }
+}
+
+/**
+ * 从原生备份加载(「加载配置」):还原卡片,并解析出配置快照。
+ * 同时支持 zip 包与旧版 JSON 快照 —— 按文件头自动识别。
+ */
+export async function importNativeBackup(
+  file: File,
+  repo: CardRepository,
+): Promise<NativeBackupResult> {
+  // zip 包:PK\x03\x04 魔数
+  const head = new Uint8Array(await file.slice(0, 4).arrayBuffer())
+  if (head[0] === 0x50 && head[1] === 0x4b) {
+    return importNativeBackupZip(await file.arrayBuffer(), repo)
+  }
+
+  // 旧版 JSON 快照
+  let parsed: BackupPayloadShape
+  try {
+    parsed = JSON.parse(await file.text())
+  } catch {
+    return { added: 0, skipped: 0, collections: [], warnings: ['备份文件不是合法 JSON'] }
+  }
+  return importBackupPayload(parsed, repo)
 }

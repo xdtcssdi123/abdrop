@@ -11,7 +11,7 @@ import { ref, computed, watch, nextTick } from 'vue'
  *   - 未启用 AI 时不阻塞保存:直接把原文作为正面
  */
 import type { AIConfig, Collection } from '~/types'
-import { summarizeKnowledge } from '~/lib/ai'
+import { summarizeKnowledge, summarizeMany, draftsFromImageResults } from '~/lib/ai'
 import { firstLine } from '~/lib/ai'
 import { captureImage, platformFetch } from '~/composables/useNativeBridge'
 import { scrollIntoViewOnKeyboard } from '~/composables/useViewport'
@@ -41,17 +41,29 @@ const sourceText = ref('')
 const front = ref('')
 const back = ref('')
 const tagsText = ref('')
-const imageUri = ref('')
+/** 已选图片列表(可多张,「AI 识图拆卡」逐张成卡) */
+const images = ref<string[]>([])
+/** 「AI 识图拆卡」生成的卡片草稿(可编辑,保存时逐张入库) */
+const drafts = ref<Array<{ imageUri: string; front: string; back: string; keywords: string[] }>>([])
 const collectionId = ref(props.activeCollectionId)
 const summarizing = ref(false)
+/** 进度文案,如「识别中 2/3」 */
+const summarizeProgress = ref('')
 const aiError = ref('')
 const aiDone = ref(false)
 
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 
-/** 可保存条件:至少有原文,或至少填了正面/背面。 */
+/** 可保存条件:有原文/正背面,或至少一张图/一张草稿。 */
 const canSave = computed(
-  () => Boolean(sourceText.value.trim() || front.value.trim() || back.value.trim() || imageUri.value),
+  () =>
+    Boolean(
+      sourceText.value.trim() ||
+        front.value.trim() ||
+        back.value.trim() ||
+        images.value.length ||
+        drafts.value.length,
+    ),
 )
 
 const aiReady = computed(
@@ -91,41 +103,71 @@ function onFieldFocus(e: FocusEvent) {
 
 async function onPickImage() {
   const shot = await captureImage()
-  if (shot?.dataUrl) imageUri.value = shot.dataUrl
+  if (shot?.dataUrl) images.value = [...images.value, shot.dataUrl]
+}
+
+function onRemoveImage(index: number) {
+  images.value = images.value.filter((_, i) => i !== index)
+}
+
+function onRemoveDraft(index: number) {
+  drafts.value = drafts.value.filter((_, i) => i !== index)
 }
 
 async function onSummarize() {
   aiError.value = ''
+  summarizeProgress.value = ''
   if (!aiReady.value) {
     aiError.value = aiHint.value || '请先在设置页完成 AI 配置'
     return
   }
   const text = sourceText.value.trim()
-  const image = imageUri.value
+  const imageList = images.value
   // 有文字或有图片(且开启识别)即可归纳
-  const canRecognize = Boolean(text || (image && props.aiConfig.vision))
+  const canRecognize = Boolean(text || (imageList.length && props.aiConfig.vision))
   if (!canRecognize) {
-    aiError.value = image && !props.aiConfig.vision
-      ? '已选图片但未开启识别图片 —— 到设置页打开「识别图片」'
-      : '请先输入知识点原文,或拍照后开启图片识别'
+    aiError.value =
+      imageList.length && !props.aiConfig.vision
+        ? '已选图片但未开启识别图片 —— 到设置页打开「识别图片」'
+        : '请先输入知识点原文,或拍照后开启图片识别'
     return
   }
 
   summarizing.value = true
   try {
-    const result = await summarizeKnowledge(text, props.aiConfig, platformFetch, image)
-    if (result.ok) {
-      // 图片识别:正面无文字时用模型回的背面首句兜底
-      front.value = result.data.front
-      back.value = result.data.back
-      // 关键词自动并进标签(已填写的标签不覆盖)
-      if (result.data.keywords.length) {
-        const merged = new Set([...parsedTags.value, ...result.data.keywords])
-        tagsText.value = [...merged].join(' ')
+    if (imageList.length) {
+      // 多图 → 识图拆卡:每张图识别成一张卡片草稿
+      const results = await summarizeMany(
+        imageList,
+        text,
+        props.aiConfig,
+        platformFetch,
+        (done, total) => (summarizeProgress.value = `识别中 ${done}/${total}`),
+      )
+      const { drafts: parsedDrafts, failed } = draftsFromImageResults(results, text)
+      drafts.value = parsedDrafts
+      summarizeProgress.value = ''
+      if (failed.length) {
+        aiError.value = failed
+          .map((f) => `${failed.length} 张识别失败:${f.error}`)
+          .join('\n')
       }
-      aiDone.value = true
+      if (!drafts.value.length && !failed.length) {
+        aiError.value = 'AI 未返回可识别的卡片内容'
+      }
     } else {
-      aiError.value = result.error
+      const result = await summarizeKnowledge(text, props.aiConfig, platformFetch)
+      if (result.ok) {
+        front.value = result.data.front
+        back.value = result.data.back
+        if (result.data.keywords.length) {
+          const merged = new Set([...parsedTags.value, ...result.data.keywords])
+          tagsText.value = [...merged].join(' ')
+        }
+        aiDone.value = true
+      } else {
+        aiError.value = result.error
+      }
     }
   } finally {
     summarizing.value = false
@@ -137,20 +179,39 @@ function reset() {
   front.value = ''
   back.value = ''
   tagsText.value = ''
-  imageUri.value = ''
+  images.value = []
+  drafts.value = []
   aiError.value = ''
   aiDone.value = false
+  summarizeProgress.value = ''
 }
 
 function onSave() {
   if (!canSave.value) return
   // 正面兜底:AI 未调用时用原文首行作为正面,保证卡片可用
-  const finalFront = front.value.trim() || firstLine(sourceText.value) || '未命名知识点'
+  const fallbackFront = front.value.trim() || firstLine(sourceText.value) || '未命名知识点'
+
+  if (drafts.value.length) {
+    // 识图拆卡:逐张草稿保存为独立卡片(每卡带自己的图与内容)
+    for (const draft of drafts.value) {
+      emit('save', {
+        sourceText: sourceText.value.trim() || draft.front,
+        front: draft.front.trim() || firstLine(sourceText.value) || '未命名知识点',
+        back: draft.back.trim(),
+        imageUri: draft.imageUri,
+        tags: [...new Set([...parsedTags.value, ...(draft.keywords ?? [])])],
+        collectionId: collectionId.value,
+      })
+    }
+    reset()
+    return
+  }
+
   emit('save', {
-    sourceText: sourceText.value.trim() || finalFront,
-    front: finalFront,
+    sourceText: sourceText.value.trim() || fallbackFront,
+    front: fallbackFront,
     back: back.value.trim(),
-    imageUri: imageUri.value,
+    imageUri: images.value[0] ?? '',
     tags: parsedTags.value,
     collectionId: collectionId.value,
   })
@@ -199,10 +260,12 @@ function onKeydown(e: KeyboardEvent) {
             />
           </label>
 
-          <!-- 图片预览 -->
-          <div v-if="imageUri" class="preview">
-            <img :src="imageUri" alt="已选图片" />
-            <button class="preview__remove" type="button" @click="imageUri = ''">移除</button>
+          <!-- 已选图片(可多张;「AI 识图拆卡」逐张成卡) -->
+          <div v-if="images.length" class="img-grid">
+            <div v-for="(img, i) in images" :key="`${i}-${img.slice(0, 24)}`" class="img-cell">
+              <img :src="img" :alt="`已选图片 ${i + 1}`" />
+              <button class="img-cell__remove" type="button" :aria-label="`移除图片${i + 1}`" @click="onRemoveImage(i)">×</button>
+            </div>
           </div>
 
           <!-- 操作行 -->
@@ -217,7 +280,7 @@ function onKeydown(e: KeyboardEvent) {
                   stroke-linejoin="round"
                 />
               </svg>
-              拍照 / 选图
+              添加图片(可多张)
             </button>
 
             <button
@@ -236,10 +299,37 @@ function onKeydown(e: KeyboardEvent) {
                   stroke-linejoin="round"
                 />
               </svg>
-              {{ summarizing ? '归纳中…' : 'AI 归纳' }}
+              {{ summarizing ? summarizeProgress || '归纳中…' : images.length > 1 ? `AI 识图拆卡 (${images.length})` : 'AI 归纳' }}
             </button>
 
             <span v-if="aiDone" class="done-tag">已归纳</span>
+          </div>
+
+          <p v-if="summarizeProgress" class="hint">{{ summarizeProgress }}</p>
+
+          <div v-if="drafts.length" class="drafts">
+            <span class="field__label">识别出的卡片({{ drafts.length }})—— 可编辑,保存时逐张入库</span>
+            <div v-for="(draft, i) in drafts" :key="`${draft.imageUri}-${i}`" class="draft">
+              <div class="draft__head">
+                <img class="draft__thumb" :src="draft.imageUri" alt="卡片图片" />
+                <span class="draft__order">第 {{ i + 1 }} 张</span>
+                <button class="draft__remove" type="button" @click="onRemoveDraft(i)">移除</button>
+              </div>
+              <textarea
+                v-model="draft.front"
+                class="field__textarea field__textarea--sm"
+                rows="2"
+                placeholder="正面 · 问题"
+                @focus="onFieldFocus"
+              />
+              <textarea
+                v-model="draft.back"
+                class="field__textarea field__textarea--sm"
+                rows="3"
+                placeholder="背面 · 答案"
+                @focus="onFieldFocus"
+              />
+            </div>
           </div>
 
           <p v-if="aiHint && !aiError" class="hint">{{ aiHint }}</p>
@@ -298,7 +388,9 @@ function onKeydown(e: KeyboardEvent) {
         </div>
 
         <footer class="compose__foot">
-          <button class="save-btn" type="button" :disabled="!canSave" @click="onSave">保存卡片</button>
+          <button class="save-btn" type="button" :disabled="!canSave" @click="onSave">
+            {{ drafts.length ? `保存 ${drafts.length} 张卡片` : '保存卡片' }}
+          </button>
         </footer>
       </div>
     </div>
@@ -424,29 +516,81 @@ function onKeydown(e: KeyboardEvent) {
   box-shadow: 0 0 0 3px rgba(63, 191, 127, 0.12);
 }
 
-.preview {
+/* 已选图片:横向小网格,每张可移除 */
+.img-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.img-cell {
   position: relative;
   border-radius: 10px;
   overflow: hidden;
-  max-height: 180px;
+  aspect-ratio: 1;
 }
 
-.preview img {
+.img-cell img {
   width: 100%;
-  max-height: 180px;
+  height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.preview__remove {
+.img-cell__remove {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  font-size: 14px;
-  padding: 4px 10px;
-  border-radius: 999px;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 15px;
+  line-height: 1;
   color: #fff;
   background: rgba(20, 28, 38, 0.55);
+}
+
+/* 识图拆卡草稿:每张卡可编辑正反面 */
+.drafts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(27, 36, 48, 0.04);
+}
+
+.draft__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.draft__thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.draft__order {
+  flex: 1;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.draft__remove {
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--danger);
+  background: rgba(224, 106, 106, 0.1);
 }
 
 .actions {

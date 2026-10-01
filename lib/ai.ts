@@ -372,6 +372,71 @@ export async function listModels(
   }
 }
 
+/** 单张图片的识别结果。 */
+export type ImageSummaryResult =
+  | { imageUri: string; ok: true; data: AISummary }
+  | { imageUri: string; ok: false; error: string }
+
+/**
+ * 多图逐张识别(「AI 识图拆卡」)。
+ *
+ * 顺序执行(避免触发网关限流),单张失败不中断其余;每张图返回独立结果,
+ * 由调用方决定生成几张卡片、失败如何提示。
+ */
+export async function summarizeMany(
+  images: readonly string[],
+  rawText: string,
+  config: AIConfig,
+  fetchImpl: typeof fetch = fetch,
+  onProgress?: (done: number, total: number) => void,
+): Promise<ImageSummaryResult[]> {
+  const out: ImageSummaryResult[] = []
+  for (let i = 0; i < images.length; i++) {
+    const uri = images[i]!
+    const result = await summarizeKnowledge(rawText, config, fetchImpl, uri)
+    out.push(
+      result.ok
+        ? { imageUri: uri, ok: true, data: result.data }
+        : { imageUri: uri, ok: false, error: result.error },
+    )
+    onProgress?.(i + 1, images.length)
+  }
+  return out
+}
+
+/** 拆卡草稿:一张图对应一张卡片。 */
+export interface CardDraft {
+  imageUri: string
+  front: string
+  back: string
+  keywords: string[]
+}
+
+/**
+ * 把逐图识别结果整理成卡片草稿(纯函数)。
+ * 识别成功的进 drafts(正面兜底用 fallbackFront),失败的单独列出。
+ */
+export function draftsFromImageResults(
+  results: readonly ImageSummaryResult[],
+  fallbackFront: string,
+): { drafts: CardDraft[]; failed: Array<{ imageUri: string; error: string }> } {
+  const drafts: CardDraft[] = []
+  const failed: Array<{ imageUri: string; error: string }> = []
+  for (const r of results) {
+    if (r.ok) {
+      drafts.push({
+        imageUri: r.imageUri,
+        front: r.data.front || firstLine(fallbackFront) || '未识别内容',
+        back: r.data.back,
+        keywords: r.data.keywords,
+      })
+    } else {
+      failed.push({ imageUri: r.imageUri, error: r.error })
+    }
+  }
+  return { drafts, failed }
+}
+
 /**
  * 调用 AI 归纳。
  * 永不抛异常 —— 失败返回 `{ ok:false, error }`,由 UI 决定是否提示。

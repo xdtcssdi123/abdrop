@@ -144,9 +144,9 @@ export interface AppConfigSnapshot {
   activeCollectionId: string
 }
 
-/** 数据导出包格式(ABDrop 原生备份)。 */
+/** 数据导出包格式(ABDrop 原生备份)。version 3 = 单个 JSON 快照;4 = zip 包(图片外置 media/)。 */
 export interface ExportBundle {
-  version: 3
+  version: 3 | 4
   exportedAt: number
   /** 配置快照(AI 接口 + 复习范围);v2 及更早的备份无此字段。 */
   config?: AppConfigSnapshot

@@ -7,6 +7,7 @@ import {
   DEFAULT_AI_CONFIG,
   SYSTEM_PROMPT,
   buildRequest,
+  draftsFromImageResults,
   effectiveBaseUrl,
   extractJSONString,
   firstLine,
@@ -17,6 +18,7 @@ import {
   parseAIResponse,
   parseDataUrl,
   summarizeKnowledge,
+  summarizeMany,
   testAIConnection,
 } from '~/lib/ai'
 import type { AIConfig } from '~/types'
@@ -418,5 +420,85 @@ describe('groupModels —— 模型分组', () => {
   it('空列表或全空组不产生空分组', () => {
     expect(groupModels([])).toEqual([])
     expect(groupModels(['cn:a'])).toEqual([{ label: '国内 (cn:)', models: ['cn:a'] }])
+  })
+})
+
+
+describe('summarizeMany —— 多图逐张识别(识图拆卡)', () => {
+  const imgs = ['data:image/png;base64,AAA', 'data:image/png;base64,BBB', 'data:image/png;base64,CCC']
+
+  it('逐张调用并返回每张的结果(含图片地址)', async () => {
+    const fetchImpl = fakeFetch(
+      openAIPayload('{"front":"Q1","back":"A1","keywords":["k"]}'),
+    )
+    const results = await summarizeMany(imgs.slice(0, 2), '原文', config(), fetchImpl)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(results).toHaveLength(2)
+    expect(results[0]).toMatchObject({ imageUri: imgs[0], ok: true })
+    expect(results[0].ok && results[0].data.front).toBe('Q1')
+    expect(results[1]).toMatchObject({ imageUri: imgs[1], ok: true })
+  })
+
+  it('进度回调按完成数上报', async () => {
+    const fetchImpl = fakeFetch(openAIPayload('{"front":"Q","back":"A","keywords":[]}'))
+    const seen: Array<[number, number]> = []
+    await summarizeMany(imgs.slice(0, 3), '', config(), fetchImpl, (done, total) => {
+      seen.push([done, total])
+    })
+    expect(seen).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3],
+    ])
+  })
+
+  it('单张失败不中断其余,失败项单独标记', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}), text: async () => 'boom' } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true, status: 200, json: async () => openAIPayload('{"front":"Q2","back":"A2","keywords":[]}'),
+      } as unknown as Response)
+    const results = await summarizeMany(imgs.slice(0, 2), '', config(), fetchImpl as unknown as typeof fetch)
+    expect(results[0]).toMatchObject({ imageUri: imgs[0], ok: false })
+    expect(results[1]).toMatchObject({ imageUri: imgs[1], ok: true })
+  })
+
+  it('未配置时不发请求,直接全部失败', async () => {
+    const fetchImpl = fakeFetch(openAIPayload('{}'))
+    const results = await summarizeMany(imgs.slice(0, 2), '', config({ apiKey: '' }), fetchImpl)
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(results.every((r) => r.ok === false)).toBe(true)
+  })
+})
+
+describe('draftsFromImageResults —— 识别结果整理成卡片草稿', () => {
+  it('成功的进草稿,正面对兜底,失败的单独列出', () => {
+    const { drafts, failed } = draftsFromImageResults(
+      [
+        { imageUri: 'img-a', ok: true, data: { front: 'A盘是什么', back: '…', keywords: ['a'] } },
+        { imageUri: 'img-b', ok: false, error: 'HTTP 429' },
+        { imageUri: 'img-c', ok: true, data: { front: '', back: '只有背' , keywords: [] } },
+      ],
+      '原文首句',
+    )
+    expect(drafts).toHaveLength(2)
+    expect(drafts[0]).toEqual({ imageUri: 'img-a', front: 'A盘是什么', back: '…', keywords: ['a'] })
+    // 正面为空 → 用兜底
+    expect(drafts[1]?.front).toBe('原文首句')
+    expect(failed).toEqual([{ imageUri: 'img-b', error: 'HTTP 429' }])
+  })
+
+  it('全部失败 → 无草稿,失败照单全收', () => {
+    const { drafts, failed } = draftsFromImageResults(
+      [{ imageUri: 'x', ok: false, error: '超时' }],
+      '兜底',
+    )
+    expect(drafts).toHaveLength(0)
+    expect(failed).toHaveLength(1)
+  })
+
+  it('空输入 → 两者皆空', () => {
+    expect(draftsFromImageResults([], '兜底')).toEqual({ drafts: [], failed: [] })
   })
 })

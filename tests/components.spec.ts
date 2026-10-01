@@ -4,9 +4,11 @@
  * 重点验证"用户看到/摸到"的行为:卡片正反面、滑动反馈徽标、
  * 录入框校验、合集栏落位。
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+import ComposeSheet from '~/components/ComposeSheet.vue'
 import KnowledgeCard from '~/components/KnowledgeCard.vue'
+import { DEFAULT_AI_CONFIG } from '~/lib/ai'
 import { createCard } from '~/lib/db'
 import { ALL_COLLECTIONS_ID } from '~/lib/db-constants'
 import type { Collection, KnowledgeCard as Card, MemoryLevel } from '~/types'
@@ -117,5 +119,120 @@ describe('KnowledgeCard 渲染', () => {
       const w = mount(KnowledgeCard, { props: { card: makeCard({ level }) } })
       expect(w.find('.card').exists()).toBe(true)
     }
+  })
+})
+
+describe('ComposeSheet 识图拆卡(多图 → 多卡)', () => {
+  const aiCfg = {
+    ...DEFAULT_AI_CONFIG,
+    enabled: true,
+    vision: true,
+    apiKey: 'sk-test',
+    baseUrl: 'https://example.com/v1',
+    model: 'vision-model',
+  }
+  const collections: Collection[] = [{ id: 'inbox', name: '未分类', order: 0, createdAt: 0 }]
+
+  function aiOK(front: string, back: string) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({ front, back, keywords: [front] }) } }],
+      }),
+      text: async () => '',
+    } as unknown as Response
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('多图识别生成多张可编辑草稿,保存时逐张发出 save 事件', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(aiOK('图一知识点', '图一答案'))
+      .mockResolvedValueOnce(aiOK('图二知识点', '图二答案'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const w = mount(ComposeSheet, {
+      props: { open: true, collections, activeCollectionId: 'inbox', aiConfig: aiCfg },
+    })
+    await flushPromises()
+
+    // 注入两张图片(组件内 images 数组)
+    ;(w.vm as any).images = ['data:image/png;base64,AAA', 'data:image/png;base64,BBB']
+    await flushPromises()
+    expect(w.findAll('.img-cell')).toHaveLength(2)
+    expect(w.text()).toContain('AI 识图拆卡 (2)')
+
+    // 点 AI 识图拆卡
+    await w.findAll('.ghost-btn')[1]!.trigger('click')
+    await flushPromises()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const drafts = w.findAll('.draft')
+    expect(drafts).toHaveLength(2)
+    expect(w.text()).toContain('识别出的卡片(2)')
+    expect(w.find('.save-btn').text()).toContain('保存 2 张卡片')
+
+    // 保存 → 逐张发出 save,每卡带自己的图片
+    await w.find('.save-btn').trigger('click')
+    await flushPromises()
+
+    const saves = w.emitted('save')!
+    expect(saves).toHaveLength(2)
+    expect(saves[0]![0]).toMatchObject({
+      imageUri: 'data:image/png;base64,AAA',
+      front: '图一知识点',
+      back: '图一答案',
+    })
+    expect(saves[1]![0]).toMatchObject({
+      imageUri: 'data:image/png;base64,BBB',
+      front: '图二知识点',
+      back: '图二答案',
+    })
+  })
+
+  it('未开启图片识别时,多图 AI 给出提示而不发起请求', async () => {
+    const config = { ...aiCfg, vision: false }
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const w = mount(ComposeSheet, {
+      props: { open: true, collections, activeCollectionId: 'inbox', aiConfig: config },
+    })
+    await flushPromises()
+    ;(w.vm as any).images = ['data:image/png;base64,AAA']
+    await flushPromises()
+
+    await w.findAll('.ghost-btn')[1]!.trigger('click')
+    await flushPromises()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(w.text()).toContain('未开启识别图片')
+  })
+
+  it('识别失败(非 2xx)不生成草稿,提示失败原因', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+      text: async () => 'boom',
+    } as unknown as Response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const w = mount(ComposeSheet, {
+      props: { open: true, collections, activeCollectionId: 'inbox', aiConfig: aiCfg },
+    })
+    await flushPromises()
+    ;(w.vm as any).images = ['data:image/png;base64,AAA']
+    await flushPromises()
+
+    await w.findAll('.ghost-btn')[1]!.trigger('click')
+    await flushPromises()
+
+    expect(w.findAll('.draft')).toHaveLength(0)
+    expect(w.text()).toContain('识别失败')
   })
 })

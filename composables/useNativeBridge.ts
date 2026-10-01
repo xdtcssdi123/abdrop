@@ -205,21 +205,36 @@ export function captureImageWeb(): Promise<CapturedImage | null> {
   })
 }
 
-/** 导出 JSON 文本到本地文件(原生走 Filesystem,Web 走 Blob 下载)。 */
+/**
+ * 导出文件到本地(原生走 Filesystem,Web 走 Blob 下载)。
+ * content 传字符串按 UTF-8 写;传 Uint8Array/ArrayBuffer 按二进制写(zip 等)。
+ */
 export async function saveExportFile(
   filename: string,
-  content: string,
+  content: string | Uint8Array | ArrayBuffer,
 ): Promise<{ ok: boolean; message: string }> {
+  const isBinary = typeof content !== 'string'
   if (isNativePlatform()) {
     try {
       const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem')
-      await Filesystem.writeFile({
-        path: filename,
-        data: content,
-        directory: Directory.Documents,
-        encoding: Encoding.UTF8,
-        recursive: true,
-      })
+      if (isBinary) {
+        // 二进制:base64 编码写入(原生端 data 接受 base64)
+        const base64 = bytesToBase64(content)
+        await Filesystem.writeFile({
+          path: filename,
+          data: base64,
+          directory: Directory.Documents,
+          recursive: true,
+        })
+      } else {
+        await Filesystem.writeFile({
+          path: filename,
+          data: content,
+          directory: Directory.Documents,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        })
+      }
       return { ok: true, message: `已保存到「文档」:${filename}` }
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : '保存失败' }
@@ -227,7 +242,10 @@ export async function saveExportFile(
   }
 
   try {
-    const blob = new Blob([content], { type: 'application/json' })
+    // Blob 接受 string / Uint8Array / ArrayBuffer;fflate 的泛型差异用 BlobPart 中转
+    const blob = new Blob([content as BlobPart], {
+      type: isBinary ? 'application/zip' : 'application/json',
+    })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -241,4 +259,15 @@ export async function saveExportFile(
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : '导出失败' }
   }
+}
+
+/** 把二进制转为 base64(原生端 Filesystem 接受 base64 字符串)。 */
+function bytesToBase64(data: string | Uint8Array | ArrayBuffer): string {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer)
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(binary)
 }

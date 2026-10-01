@@ -10,7 +10,7 @@ import { PROVIDER_PRESETS, groupModels, listModels, testAIConnection } from '~/l
 import {
   ANKI_IMPORT_ACCEPT,
   exportForAnki,
-  exportNativeBackup,
+  exportNativeBackupZip,
   importAnkiFile,
   importNativeBackup,
 } from '~/lib/anki-io'
@@ -21,7 +21,15 @@ import {
   applyFullscreen,
   getFullscreenPreference,
   setFullscreenPreference,
+  isNativePlatform,
 } from '~/composables/useNativeBridge'
+import {
+  APP_VERSION,
+  UPDATE_REPO_NAME,
+  UPDATE_REPO_OWNER,
+  checkForUpdate,
+  type UpdateCheckResult,
+} from '~/lib/update'
 import { useCardRepository } from '~/lib/db'
 import { createReviewService } from '~/lib/review-service'
 import { SEED_COLLECTIONS, SEED_SPECS, clearDemoData, seedDemoData } from '~/lib/seed'
@@ -111,6 +119,16 @@ onMounted(async () => {
   await checkin.load()
   syncCheckinForm()
   fullscreenOn.value = await getFullscreenPreference()
+  // 原生环境读真实 versionName,与 build.gradle 保持一致
+  if (isNativePlatform()) {
+    try {
+      const { App } = await import('@capacitor/app')
+      const info = await App.getInfo()
+      if (info?.version) localVersion.value = info.version
+    } catch {
+      /* 插件缺失保留常量 */
+    }
+  }
 })
 
 /** 切换全屏沉浸(隐藏状态栏):立即应用并持久化。 */
@@ -140,6 +158,14 @@ function showToast(text: string) {
   toast.value = text
   if (toastTimer) clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toast.value = ''), 2200)
+}
+
+/** 字节数 → 人类可读(B / KB / MB)。 */
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '未知大小'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
 onBeforeUnmount(() => {
@@ -224,6 +250,60 @@ async function onFetchModels() {
     }
   } finally {
     modelBusy.value = false
+  }
+}
+
+// ── 检查更新(GitHub Release)───────────────────────────────
+/** 本机实际版本(原生读 build.gradle 的 versionName,Web 用常量)。 */
+const localVersion = ref(APP_VERSION)
+/** 最近一次检查结果。 */
+const updateResult = ref<UpdateCheckResult | null>(null)
+/** 检查中。 */
+const updateBusy = ref(false)
+/** 更新面板是否展开。 */
+const updateOpen = ref(false)
+
+async function onCheckUpdate() {
+  if (updateBusy.value) return
+  updateBusy.value = true
+  updateResult.value = null
+  try {
+    const result = await checkForUpdate(
+      UPDATE_REPO_OWNER,
+      UPDATE_REPO_NAME,
+      platformFetch,
+      localVersion.value,
+    )
+    updateResult.value = result
+    if (result.error) {
+      showToast(`检查失败:${result.error}`)
+    } else if (result.hasUpdate) {
+      showToast(`发现新版本 ${result.latest}`)
+    } else {
+      showToast('已是最新版本')
+    }
+  } finally {
+    updateBusy.value = false
+  }
+}
+
+/** 下载/打开最新 APK:原生用系统浏览器下载,Web 开新标签。 */
+function onDownloadUpdate() {
+  const result = updateResult.value
+  if (!result?.hasUpdate) return
+  const url = result.apkAsset?.browser_download_url ?? result.release?.html_url
+  if (!url) return
+  if (isNativePlatform()) {
+    // Android WebView 的 _system 目标交给系统浏览器打开
+    window.open(url, '_system')
+  } else {
+    const a = document.createElement('a')
+    a.href = url
+    a.target = '_blank'
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
   }
 }
 
@@ -367,13 +447,13 @@ async function onExportAnki(format: 'tsv' | 'csv') {
 async function onExportBackup() {
   busy.value = 'export'
   try {
-    // 「保存配置」:单个 JSON 快照 —— AI 配置 + 复习范围 + 合集 + 卡片(含复习进度)
-    const out = await exportNativeBackup(repo, {
+    // 「保存配置」:zip 备份包 —— 图片外置 + 配置 + 合集 + 卡片(含复习进度)
+    const out = await exportNativeBackupZip(repo, {
       ai: { ...aiConfig.value },
       activeCollectionId: activeCollectionId.value,
     })
     const res = await saveExportFile(out.filename, out.content)
-    showToast(res.ok ? `已保存配置:${out.count} 张卡片` : res.message)
+    showToast(res.ok ? `已保存备份:${out.count} 张卡片` : res.message)
   } finally {
     busy.value = ''
   }
@@ -505,6 +585,55 @@ async function onClearAll() {
           </p>
         </div>
       </section>
+      <!-- 检查更新:基于 GitHub Release 一键升级 -->
+      <section class="panel">
+        <button class="panel__head" type="button" @click="updateOpen = !updateOpen">
+          <span class="panel__name">检查更新</span>
+          <span class="panel__meta">
+            {{ updateResult?.hasUpdate ? `发现新版本 ${updateResult.latest}` : `v${localVersion}` }}
+          </span>
+          <svg class="panel__caret" :class="{ 'panel__caret--open': updateOpen }" viewBox="0 0 24 24" width="18" height="18">
+            <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+        <div v-if="updateOpen" class="panel__body">
+          <p class="field__hint">
+            App 通过 GitHub Release 分发更新。点击「检查更新」比对当前版本与最新发布;
+            有新版本时可直接下载 APK 安装。
+          </p>
+          <div class="btn-row">
+            <button class="btn btn--ghost" type="button" :disabled="updateBusy" @click="onCheckUpdate">
+              {{ updateBusy ? '检查中…' : '检查更新' }}
+            </button>
+          </div>
+
+          <p v-if="updateResult?.error" class="field__hint field__hint--bad">
+            检查失败:{{ updateResult.error }}
+          </p>
+
+          <template v-else-if="updateResult?.hasUpdate">
+            <div class="group">
+              <span class="field__label">新版本 {{ updateResult.latest }} 可用</span>
+              <p v-if="updateResult.release?.body" class="field__hint update-notes">{{ updateResult.release.body }}</p>
+              <div class="btn-row">
+                <button class="btn" type="button" @click="onDownloadUpdate">
+                  {{ updateResult.apkAsset ? '下载并安装' : '前往 Release 页' }}
+                </button>
+              </div>
+              <p class="field__hint">
+                {{ updateResult.apkAsset
+                  ? `下载 ${updateResult.apkAsset.name}(${formatBytes(updateResult.apkAsset.size)}),下载完成后点击通知即可安装。`
+                  : '该 Release 未附带 APK,将打开 GitHub Release 页面。' }}
+              </p>
+            </div>
+          </template>
+
+          <p v-else-if="updateResult && !updateResult.error" class="field__hint">
+            已是最新版本(v{{ updateResult.local }})。
+          </p>
+        </div>
+      </section>
+
       <!-- ① AI 接口配置 -->
       <section class="panel">
         <button class="panel__head" type="button" @click="toggle('ai')">
@@ -725,11 +854,11 @@ async function onClearAll() {
                 {{ busy === 'import' ? '处理中…' : '导入 Anki 文件' }}
               </button>
               <button class="btn btn--ghost" type="button" :disabled="busy === 'import'" @click="backupInput?.click()">
-                加载配置(还原备份)
+                加载备份(还原)
               </button>
             </div>
             <input ref="ankiInput" class="hidden-input" type="file" :accept="ANKI_IMPORT_ACCEPT" @change="onImportAnki" />
-            <input ref="backupInput" class="hidden-input" type="file" accept=".json" @change="onImportBackup" />
+            <input ref="backupInput" class="hidden-input" type="file" accept=".json,.zip,application/zip" @change="onImportBackup" />
           </div>
 
           <!-- 导出 -->
@@ -745,12 +874,12 @@ async function onClearAll() {
             </div>
             <div class="btn-row">
               <button class="btn btn--ghost" type="button" :disabled="busy === 'export'" @click="onExportBackup">
-                保存配置(含卡片与复习进度)
+                备份全部数据(zip)
               </button>
             </div>
             <p class="field__hint">
-              「保存配置」导出单个 JSON 快照:AI 配置、当前复习范围、合集、卡片与复习进度全部包含。
-              文件含 API Key,请勿外传;「加载配置」会覆盖当前 AI 配置与复习范围,卡片按 id 幂等合并。
+              「备份全部数据」导出 zip 包:卡片文字、图片(独立文件)、复习进度与全部配置(AI / 复习范围 / 打卡 / 全屏)完整包含。
+              支持导入旧版 JSON 快照;文件含 API Key,请勿外传;「加载备份」会覆盖当前 AI 配置与复习范围,卡片按 id 幂等合并。
             </p>
           </div>
 
@@ -1019,6 +1148,14 @@ async function onClearAll() {
 
 .field__hint--bad {
   color: var(--danger);
+}
+
+/* 更新说明:多行文本,保留换行 */
+.update-notes {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 140px;
+  overflow-y: auto;
 }
 
 .input {

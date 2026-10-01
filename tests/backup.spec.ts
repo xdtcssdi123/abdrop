@@ -9,10 +9,15 @@
  * - 重复导入幂等(已存在 id 跳过)
  */
 import { describe, expect, it } from 'vitest'
-import { exportNativeBackup, importNativeBackup } from '~/lib/anki-io'
+import {
+  exportNativeBackup,
+  exportNativeBackupZip,
+  importNativeBackup,
+} from '~/lib/anki-io'
 import { createMemoryRepository, type CardRepository } from '~/lib/db'
 import { DEFAULT_AI_CONFIG } from '~/lib/ai'
 import type { AppConfigSnapshot, KnowledgeCard } from '~/types'
+import { strFromU8, unzipSync } from 'fflate'
 
 function makeBackupFile(json: unknown): File {
   return new File([JSON.stringify(json)], 'abdrop-backup.json', { type: 'application/json' })
@@ -50,7 +55,7 @@ describe('原生备份 v3(保存配置/加载配置)', () => {
     const out = await exportNativeBackup(repo, config, new Date(NOW))
     expect(out.count).toBe(1)
 
-    const parsed = JSON.parse(out.content)
+    const parsed = JSON.parse(out.content as string)
     expect(parsed.version).toBe(3)
     expect(parsed.config).toEqual(config)
     expect(parsed.collections.map((c: any) => c.name)).toContain('数学')
@@ -66,7 +71,7 @@ describe('原生备份 v3(保存配置/加载配置)', () => {
   it('不传 config 时不写 config 块(v2 兼容形态)', async () => {
     const { repo } = await seedRepo()
     const out = await exportNativeBackup(repo)
-    const parsed = JSON.parse(out.content)
+    const parsed = JSON.parse(out.content as string)
     expect(parsed.version).toBe(3)
     expect(parsed.config).toBeUndefined()
     expect(parsed.cards).toHaveLength(1)
@@ -184,7 +189,7 @@ describe('原生备份 v3(保存配置/加载配置)', () => {
   it('重复导入幂等:已存在 id 跳过,不产生重复卡', async () => {
     const { repo } = await seedRepo()
     const out = await exportNativeBackup(repo, undefined, new Date(NOW))
-    const file = new File([out.content], 'backup.json', { type: 'application/json' })
+    const file = new File([out.content as string], 'backup.json', { type: 'application/json' })
     const report = await importNativeBackup(file, repo)
     expect(report.added).toBe(0)
     expect(report.skipped).toBe(1)
@@ -230,5 +235,88 @@ describe('原生备份 v3(保存配置/加载配置)', () => {
     const report = await importNativeBackup(file, target)
     expect(report.added).toBe(1)
     expect(report.restoredConfig).toBeUndefined()
+  })
+})
+
+describe('zip 备份包(图片外置 + 全量还原)', () => {
+  it('导出 zip:json + media 图片独立文件', async () => {
+    const repo = createMemoryRepository()
+    const col = await repo.ensureCollection('英语')
+    const card = await repo.addCard(
+      {
+        front: 'word',
+        back: '含义',
+        collectionId: col.id,
+        imageUri: 'data:image/png;base64,AAAA',
+      },
+      NOW,
+    )
+
+    const config: AppConfigSnapshot = {
+      ai: { ...DEFAULT_AI_CONFIG, enabled: true, model: 'm' },
+      activeCollectionId: col.id,
+    }
+    const out = await exportNativeBackupZip(repo, config, new Date(NOW))
+    expect(out.mime).toBe('application/zip')
+    expect(out.content).toBeInstanceOf(Uint8Array)
+
+    const files = unzipSync(out.content as Uint8Array)
+    // json 存在且含 config
+    const json = JSON.parse(strFromU8(files['abdrop-backup.json']!))
+    expect(json.version).toBe(4)
+    expect(json.config).toEqual(config)
+    // 图片外置:json 里是路径,media/ 里有二进制
+    const stored = json.cards[0] as KnowledgeCard
+    expect(stored.id).toBe(card.id)
+    expect(stored.imageUri).toContain('media/')
+    expect(files[stored.imageUri]).toBeTruthy()
+  })
+
+  it('导入 zip:图片从 media 回填为 dataURL,卡片/配置还原', async () => {
+    // 先导出一份带图片的 zip
+    const repo = createMemoryRepository()
+    const col = await repo.ensureCollection('英语')
+    await repo.addCard(
+      {
+        front: 'word',
+        back: '含义',
+        collectionId: col.id,
+        imageUri: 'data:image/png;base64,QUJD',
+      },
+      NOW,
+    )
+    const config: AppConfigSnapshot = {
+      ai: { ...DEFAULT_AI_CONFIG, enabled: true, model: 'm' },
+      activeCollectionId: col.id,
+    }
+    const out = await exportNativeBackupZip(repo, config, new Date(NOW))
+
+    // 用 zip 文件导入到新库
+    const zipFile = new File([Uint8Array.from(out.content as Uint8Array)], 'abdrop-backup.zip', {
+      type: 'application/zip',
+    })
+    const target = createMemoryRepository()
+    const report = await importNativeBackup(zipFile, target)
+    expect(report.added).toBe(1)
+    expect(report.restoredConfig).toEqual(config)
+
+    const restored = (await target.listCards())[0]
+    expect(restored.front).toBe('word')
+    // 图片被还原为 dataURL(不再是 media/ 路径)
+    expect(restored.imageUri).toContain('data:image/png;base64,')
+    expect(restored.imageUri).toContain('QUJD')
+  })
+
+  it('zip 包缺 json 时友好报错,不抛异常', async () => {
+    const { zipSync } = await import('fflate')
+    const { strToU8 } = await import('fflate')
+    const bad = new File(
+      [zipSync({ 'random.txt': strToU8('hello') })],
+      'bad.zip',
+      { type: 'application/zip' },
+    )
+    const report = await importNativeBackup(bad, createMemoryRepository())
+    expect(report.added).toBe(0)
+    expect(report.warnings.join()).toContain('abdrop-backup.json')
   })
 })

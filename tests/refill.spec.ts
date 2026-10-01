@@ -102,7 +102,7 @@ describe('补位不闪烁', () => {
      */
     const cards = makeCards(3)
     const w = mountStack(cards)
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(200, 400) as any)
@@ -133,7 +133,7 @@ describe('补位不闪烁', () => {
   it('【关键】补位结束后卡片恢复正常可见(不会永久透明)', async () => {
     const cards = makeCards(3)
     const w = mountStack(cards)
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(200, 400) as any)
@@ -153,7 +153,7 @@ describe('补位不闪烁', () => {
     vi.setConfig({ testTimeout: 15000 })
     const cards = makeCards(4)
     const w = mountStack(cards)
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
     let pool = [...cards]
 
     for (let round = 0; round < 2; round++) {
@@ -177,7 +177,7 @@ describe('补位不闪烁', () => {
 
   it('队列清空后不残留补位状态', async () => {
     const w = mountStack(makeCards(1))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(200, 400) as any)
@@ -197,7 +197,7 @@ describe('补位不闪烁', () => {
 
   it('未达阈值的回弹不触发补位(不应把当前卡弄透明)', async () => {
     const w = mountStack(makeCards(3))
-    const stack = w.find('.stack')
+    const stack = w.find('.stack__drag')
 
     await stack.trigger('touchstart', touchEvent(0, 400) as any)
     await stack.trigger('touchmove', touchEvent(40, 400) as any)

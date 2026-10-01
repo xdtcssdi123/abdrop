@@ -89,6 +89,8 @@ let mode: 'idle' | 'swipe' = 'idle'
 let rafId = 0
 /** 本次触摸起点是否落在答案滚动区(决定纵向手势是否放行给原生滚动)。 */
 let touchInScroll = false
+/** 本次触摸起点是否落在卡片本体上(决定单击是否打开答案)。 */
+let touchOnCard = false
 /**
  * 答案层最近一次关闭的时间戳。
  * 关闭瞬间的漏网触摸/单击(如轻点关闭后 touchend 冒泡)会在极短时间内
@@ -199,6 +201,8 @@ const tapDetector = createTapDetector({
     if (answerCard.value) return
     // 答案层刚关闭的冷却期内,漏网的触摸/单击不重开答案
     if (Date.now() - lastAnswerClosedAt < ANSWER_CLOSE_COOLDOWN_MS) return
+    // 只有点卡片本体才打开答案;点卡片外的空白不响应
+    if (!touchOnCard) return
     if (!topCard.value?.back) return
     answerCard.value = { card: topCard.value, index: 0 }
     void hapticTap('light')
@@ -244,6 +248,15 @@ function onTouchStart(e: TouchEvent) {
   // 起点是否落在卡片可滚动内容区(翻面后的答案/图片区)
   const target = e.target as HTMLElement | null
   touchInScroll = Boolean(target?.closest?.('.card__scroll'))
+  // 起点是否落在卡片本体(.stack__drag)上 —— 空白处单击不打开答案、滑动不带动卡片
+  touchOnCard = Boolean(target?.closest?.('.stack__drag'))
+  // 只有从卡片上开始的手势才进入卡片手势引擎;
+  // 点空白处直接不启动拖拽,让 onTouchMove/onTouchEnd 因 !drag 短路。
+  if (!touchOnCard) {
+    drag = null
+    dragging.value = false
+    return
+  }
   drag = createDragState(t.clientX, t.clientY)
   pointerStartAt = performance.now()
   mode = 'idle'
