@@ -1006,11 +1006,11 @@ describe('设置页页面集成', () => {
     const w = await mountSettings()
     const heads = w.findAll('.panel__head').map((h) => h.text())
     expect(heads).toHaveLength(5)
-    expect(heads[0]).toContain('全屏沉浸')
-    expect(heads[1]).toContain('检查更新')
+    expect(heads[0]).toContain('合集管理')
+    expect(heads[1]).toContain('数据导入导出')
     expect(heads[2]).toContain('AI 接口配置')
-    expect(heads[3]).toContain('合集管理')
-    expect(heads[4]).toContain('数据导入导出')
+    expect(heads[3]).toContain('检查更新')
+    expect(heads[4]).toContain('全屏沉浸')
   })
 
   it('显示卡片总数', async () => {
@@ -1043,7 +1043,7 @@ describe('设置页页面集成', () => {
     await repo.createCollection('数学')
 
     const w = await mountSettings()
-    await w.findAll('.panel__head')[3]!.trigger('click')
+    await w.findAll('.panel__head')[0]!.trigger('click')
     await settle()
 
     expect(w.text()).toContain('未分类')
@@ -1052,7 +1052,7 @@ describe('设置页页面集成', () => {
 
   it('默认合集不提供删除按钮(不能删掉唯一的兜底合集)', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[3]!.trigger('click')
+    await w.findAll('.panel__head')[0]!.trigger('click')
     await settle()
 
     const items = w.findAll('.list__item')
@@ -1063,7 +1063,7 @@ describe('设置页页面集成', () => {
 
   it('展开数据面板时提供 Anki 导入与导出入口', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[4]!.trigger('click')
+    await w.findAll('.panel__head')[1]!.trigger('click')
     await settle()
 
     expect(w.text()).toContain('导入 Anki 文件')
@@ -1073,7 +1073,7 @@ describe('设置页页面集成', () => {
 
   it('全屏沉浸面板可展开,切换开关持久化偏好', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[0]!.trigger('click')
+    await w.findAll('.panel__head')[4]!.trigger('click')
     await settle()
 
     expect(w.text()).toContain('隐藏系统状态栏')
@@ -1146,7 +1146,7 @@ describe('设置页页面集成', () => {
     const math = await repo.createCollection('数学')
     const w = await mountSettings()
 
-    await w.findAll('.panel__head')[3]!.trigger('click')
+    await w.findAll('.panel__head')[0]!.trigger('click')
     await settle()
 
     const opts = w.findAll('.scope-opt')
@@ -1195,7 +1195,7 @@ describe('设置页页面集成', () => {
 
   it('检查更新:面板存在且显示本地版本', async () => {
     const w = await mountSettings()
-    const head = w.findAll('.panel__head')[1]!
+    const head = w.findAll('.panel__head')[3]!
     expect(head.text()).toContain('检查更新')
     expect(head.text()).toContain('v1.0')
     // 默认收起
@@ -1224,7 +1224,7 @@ describe('设置页页面集成', () => {
       ) as Response
     try {
       const w = await mountSettings()
-      const head = w.findAll('.panel__head')[1]!
+      const head = w.findAll('.panel__head')[3]!
       await head.trigger('click')
       await settle()
 
@@ -1258,7 +1258,7 @@ describe('设置页页面集成', () => {
       ) as Response
     try {
       const w = await mountSettings()
-      const head = w.findAll('.panel__head')[1]!
+      const head = w.findAll('.panel__head')[3]!
       await head.trigger('click')
       await settle()
 

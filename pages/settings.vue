@@ -528,6 +528,56 @@ async function onClearAll() {
         录入知识点
       </button>
 
+      <!-- ② 合集管理 -->
+      <section class="panel">
+        <button class="panel__head" type="button" @click="toggle('collections')">
+          <span class="panel__name">合集管理</span>
+          <span class="panel__meta">{{ collections.length }} 个</span>
+          <svg class="panel__caret" :class="{ 'panel__caret--open': panel === 'collections' }" viewBox="0 0 24 24" width="18" height="18">
+            <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+
+        <div v-if="panel === 'collections'" class="panel__body">
+          <!-- 复习范围:首页按此分组刷卡 -->
+          <div class="group">
+            <span class="field__label">复习范围</span>
+            <ul class="scope-list">
+              <li v-for="opt in scopeOptions" :key="opt.id" class="scope-item">
+                <button
+                  class="scope-opt"
+                  :class="{ 'scope-opt--on': activeCollectionId === opt.id }"
+                  type="button"
+                  @click="onSelectScope(opt.id)"
+                >
+                  <span class="scope-opt__name">{{ opt.name }}</span>
+                  <span v-if="activeCollectionId === opt.id" class="scope-opt__check">✓</span>
+                </button>
+              </li>
+            </ul>
+            <p class="field__hint">选择后,首页只复习该分组的卡片;选「全部」复习所有合集。</p>
+          </div>
+
+          <div class="group">
+            <span class="field__label">合集列表</span>
+            <ul class="list">
+              <li v-for="col in collections" :key="col.id" class="list__item">
+                <span class="list__name">{{ col.name }}</span>
+                <button class="mini" type="button" @click="onRenameCollection(col)">改名</button>
+                <button v-if="col.id !== 'inbox'" class="mini mini--danger" type="button" @click="onRemoveCollection(col)">
+                  删除
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          <div class="btn-row">
+            <input v-model="newCollectionName" class="input input--grow" type="text" placeholder="新合集名称" @keyup.enter="onCreateCollection" />
+            <button class="btn" type="button" @click="onCreateCollection">添加</button>
+          </div>
+        </div>
+      </section>
+
       <!-- 每日打卡提醒:可折叠卡片(独立折叠,默认收起),首页右上角胶囊 + 每小时系统通知 -->
       <section class="panel checkin-panel">
         <button class="checkin-panel__head" type="button" @click="checkinOpen = !checkinOpen">
@@ -560,77 +610,80 @@ async function onClearAll() {
         </div>
       </section>
 
-      <!-- 全屏沉浸:隐藏系统状态栏 -->
+      <!-- ③ 数据导入导出 -->
       <section class="panel">
-        <button class="panel__head" type="button" @click="panel === 'fullscreen' ? (panel = 'none') : (panel = 'fullscreen')">
-          <span class="panel__name">全屏沉浸</span>
-          <span class="panel__meta">{{ fullscreenOn ? '已开启' : '未开启' }}</span>
-          <svg class="panel__caret" :class="{ 'panel__caret--open': panel === 'fullscreen' }" viewBox="0 0 24 24" width="18" height="18">
+        <button class="panel__head" type="button" @click="toggle('data')">
+          <span class="panel__name">数据导入导出</span>
+          <span class="panel__meta">Anki 兼容</span>
+          <svg class="panel__caret" :class="{ 'panel__caret--open': panel === 'data' }" viewBox="0 0 24 24" width="18" height="18">
             <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
           </svg>
         </button>
-        <div v-if="panel === 'fullscreen'" class="panel__body">
-          <label class="row">
-            <span class="row__label">隐藏系统状态栏</span>
-            <input
-              class="switch"
-              type="checkbox"
-              :checked="fullscreenOn"
-              @change="onFullscreenToggle"
-            />
-          </label>
+
+        <div v-if="panel === 'data'" class="panel__body">
           <p class="field__hint">
-            开启后隐藏手机顶部状态栏(时钟、电量等),卡片占据整个屏幕,浏览更沉浸。
-            原生容器内即时生效;网页预览无状态栏可隐藏。
+            支持导入 Anki 的 .apkg 集合包与「纯文本」导出(TSV/CSV);导出的文件可直接被 Anki 导入。
           </p>
-        </div>
-      </section>
-      <!-- 检查更新:基于 GitHub Release 一键升级 -->
-      <section class="panel">
-        <button class="panel__head" type="button" @click="updateOpen = !updateOpen">
-          <span class="panel__name">检查更新</span>
-          <span class="panel__meta">
-            {{ updateResult?.hasUpdate ? `发现新版本 ${updateResult.latest}` : `v${localVersion}` }}
-          </span>
-          <svg class="panel__caret" :class="{ 'panel__caret--open': updateOpen }" viewBox="0 0 24 24" width="18" height="18">
-            <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-          </svg>
-        </button>
-        <div v-if="updateOpen" class="panel__body">
-          <p class="field__hint">
-            App 通过 GitHub Release 分发更新。点击「检查更新」比对当前版本与最新发布;
-            有新版本时可直接下载 APK 安装。
-          </p>
-          <div class="btn-row">
-            <button class="btn btn--ghost" type="button" :disabled="updateBusy" @click="onCheckUpdate">
-              {{ updateBusy ? '检查中…' : '检查更新' }}
-            </button>
+
+          <!-- 导入 -->
+          <div class="group">
+            <span class="field__label">导入</span>
+            <div class="btn-row">
+              <button class="btn btn--ghost" type="button" :disabled="busy === 'import'" @click="ankiInput?.click()">
+                {{ busy === 'import' ? '处理中…' : '导入 Anki 文件' }}
+              </button>
+              <button class="btn btn--ghost" type="button" :disabled="busy === 'import'" @click="backupInput?.click()">
+                加载备份(还原)
+              </button>
+            </div>
+            <input ref="ankiInput" class="hidden-input" type="file" :accept="ANKI_IMPORT_ACCEPT" @change="onImportAnki" />
+            <input ref="backupInput" class="hidden-input" type="file" accept=".json,.zip,application/zip" @change="onImportBackup" />
           </div>
 
-          <p v-if="updateResult?.error" class="field__hint field__hint--bad">
-            检查失败:{{ updateResult.error }}
-          </p>
-
-          <template v-else-if="updateResult?.hasUpdate">
-            <div class="group">
-              <span class="field__label">新版本 {{ updateResult.latest }} 可用</span>
-              <p v-if="updateResult.release?.body" class="field__hint update-notes">{{ updateResult.release.body }}</p>
-              <div class="btn-row">
-                <button class="btn" type="button" @click="onDownloadUpdate">
-                  {{ updateResult.apkAsset ? '下载并安装' : '前往 Release 页' }}
-                </button>
-              </div>
-              <p class="field__hint">
-                {{ updateResult.apkAsset
-                  ? `下载 ${updateResult.apkAsset.name}(${formatBytes(updateResult.apkAsset.size)}),下载完成后点击通知即可安装。`
-                  : '该 Release 未附带 APK,将打开 GitHub Release 页面。' }}
-              </p>
+          <!-- 导出 -->
+          <div class="group">
+            <span class="field__label">导出</span>
+            <div class="btn-row">
+              <button class="btn btn--ghost" type="button" :disabled="busy === 'export'" @click="onExportAnki('tsv')">
+                导出 Anki TSV
+              </button>
+              <button class="btn btn--ghost" type="button" :disabled="busy === 'export'" @click="onExportAnki('csv')">
+                导出 Anki CSV
+              </button>
             </div>
-          </template>
+            <div class="btn-row">
+              <button class="btn btn--ghost" type="button" :disabled="busy === 'export'" @click="onExportBackup">
+                备份全部数据(zip)
+              </button>
+            </div>
+            <p class="field__hint">
+              「备份全部数据」导出 zip 包:卡片文字、图片(独立文件)、复习进度与全部配置(AI / 复习范围 / 打卡 / 全屏)完整包含。
+              支持导入旧版 JSON 快照;文件含 API Key,请勿外传;「加载备份」会覆盖当前 AI 配置与复习范围,卡片按 id 幂等合并。
+            </p>
+          </div>
 
-          <p v-else-if="updateResult && !updateResult.error" class="field__hint">
-            已是最新版本(v{{ updateResult.local }})。
-          </p>
+          <pre v-if="lastReport" class="report">{{ lastReport }}</pre>
+
+          <!-- 示例数据:便于快速体验与演示 -->
+          <div class="group">
+            <span class="field__label">示例数据</span>
+            <p class="field__hint">
+              载入 {{ seedCount }} 张覆盖各记忆等级与到期状态的示例卡片({{ seedScope }})。
+              可重复点击,不会产生重复卡片。
+            </p>
+            <div class="btn-row">
+              <button class="btn btn--ghost" type="button" :disabled="busy === 'seed'" @click="onSeedDemo">
+                载入示例数据
+              </button>
+              <button class="btn btn--ghost" type="button" :disabled="busy === 'seed'" @click="onClearDemo">
+                移除示例数据
+              </button>
+            </div>
+          </div>
+
+          <div class="group">
+            <button class="btn btn--danger" type="button" @click="onClearAll">清空全部数据</button>
+          </div>
         </div>
       </section>
 
@@ -781,130 +834,78 @@ async function onClearAll() {
         </div>
       </section>
 
-      <!-- ② 合集管理 -->
+      <!-- 检查更新:基于 GitHub Release 一键升级 -->
       <section class="panel">
-        <button class="panel__head" type="button" @click="toggle('collections')">
-          <span class="panel__name">合集管理</span>
-          <span class="panel__meta">{{ collections.length }} 个</span>
-          <svg class="panel__caret" :class="{ 'panel__caret--open': panel === 'collections' }" viewBox="0 0 24 24" width="18" height="18">
+        <button class="panel__head" type="button" @click="updateOpen = !updateOpen">
+          <span class="panel__name">检查更新</span>
+          <span class="panel__meta">
+            {{ updateResult?.hasUpdate ? `发现新版本 ${updateResult.latest}` : `v${localVersion}` }}
+          </span>
+          <svg class="panel__caret" :class="{ 'panel__caret--open': updateOpen }" viewBox="0 0 24 24" width="18" height="18">
             <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
           </svg>
         </button>
-
-        <div v-if="panel === 'collections'" class="panel__body">
-          <!-- 复习范围:首页按此分组刷卡 -->
-          <div class="group">
-            <span class="field__label">复习范围</span>
-            <ul class="scope-list">
-              <li v-for="opt in scopeOptions" :key="opt.id" class="scope-item">
-                <button
-                  class="scope-opt"
-                  :class="{ 'scope-opt--on': activeCollectionId === opt.id }"
-                  type="button"
-                  @click="onSelectScope(opt.id)"
-                >
-                  <span class="scope-opt__name">{{ opt.name }}</span>
-                  <span v-if="activeCollectionId === opt.id" class="scope-opt__check">✓</span>
-                </button>
-              </li>
-            </ul>
-            <p class="field__hint">选择后,首页只复习该分组的卡片;选「全部」复习所有合集。</p>
-          </div>
-
-          <div class="group">
-            <span class="field__label">合集列表</span>
-            <ul class="list">
-              <li v-for="col in collections" :key="col.id" class="list__item">
-                <span class="list__name">{{ col.name }}</span>
-                <button class="mini" type="button" @click="onRenameCollection(col)">改名</button>
-                <button v-if="col.id !== 'inbox'" class="mini mini--danger" type="button" @click="onRemoveCollection(col)">
-                  删除
-                </button>
-              </li>
-            </ul>
-          </div>
-
+        <div v-if="updateOpen" class="panel__body">
+          <p class="field__hint">
+            App 通过 GitHub Release 分发更新。点击「检查更新」比对当前版本与最新发布;
+            有新版本时可直接下载 APK 安装。
+          </p>
           <div class="btn-row">
-            <input v-model="newCollectionName" class="input input--grow" type="text" placeholder="新合集名称" @keyup.enter="onCreateCollection" />
-            <button class="btn" type="button" @click="onCreateCollection">添加</button>
+            <button class="btn btn--ghost" type="button" :disabled="updateBusy" @click="onCheckUpdate">
+              {{ updateBusy ? '检查中…' : '检查更新' }}
+            </button>
           </div>
+
+          <p v-if="updateResult?.error" class="field__hint field__hint--bad">
+            检查失败:{{ updateResult.error }}
+          </p>
+
+          <template v-else-if="updateResult?.hasUpdate">
+            <div class="group">
+              <span class="field__label">新版本 {{ updateResult.latest }} 可用</span>
+              <p v-if="updateResult.release?.body" class="field__hint update-notes">{{ updateResult.release.body }}</p>
+              <div class="btn-row">
+                <button class="btn" type="button" @click="onDownloadUpdate">
+                  {{ updateResult.apkAsset ? '下载并安装' : '前往 Release 页' }}
+                </button>
+              </div>
+              <p class="field__hint">
+                {{ updateResult.apkAsset
+                  ? `下载 ${updateResult.apkAsset.name}(${formatBytes(updateResult.apkAsset.size)}),下载完成后点击通知即可安装。`
+                  : '该 Release 未附带 APK,将打开 GitHub Release 页面。' }}
+              </p>
+            </div>
+          </template>
+
+          <p v-else-if="updateResult && !updateResult.error" class="field__hint">
+            已是最新版本(v{{ updateResult.local }})。
+          </p>
         </div>
       </section>
 
-      <!-- ③ 数据导入导出 -->
+      <!-- 全屏沉浸:隐藏系统状态栏 -->
       <section class="panel">
-        <button class="panel__head" type="button" @click="toggle('data')">
-          <span class="panel__name">数据导入导出</span>
-          <span class="panel__meta">Anki 兼容</span>
-          <svg class="panel__caret" :class="{ 'panel__caret--open': panel === 'data' }" viewBox="0 0 24 24" width="18" height="18">
+        <button class="panel__head" type="button" @click="panel === 'fullscreen' ? (panel = 'none') : (panel = 'fullscreen')">
+          <span class="panel__name">全屏沉浸</span>
+          <span class="panel__meta">{{ fullscreenOn ? '已开启' : '未开启' }}</span>
+          <svg class="panel__caret" :class="{ 'panel__caret--open': panel === 'fullscreen' }" viewBox="0 0 24 24" width="18" height="18">
             <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
           </svg>
         </button>
-
-        <div v-if="panel === 'data'" class="panel__body">
+        <div v-if="panel === 'fullscreen'" class="panel__body">
+          <label class="row">
+            <span class="row__label">隐藏系统状态栏</span>
+            <input
+              class="switch"
+              type="checkbox"
+              :checked="fullscreenOn"
+              @change="onFullscreenToggle"
+            />
+          </label>
           <p class="field__hint">
-            支持导入 Anki 的 .apkg 集合包与「纯文本」导出(TSV/CSV);导出的文件可直接被 Anki 导入。
+            开启后隐藏手机顶部状态栏(时钟、电量等),卡片占据整个屏幕,浏览更沉浸。
+            原生容器内即时生效;网页预览无状态栏可隐藏。
           </p>
-
-          <!-- 导入 -->
-          <div class="group">
-            <span class="field__label">导入</span>
-            <div class="btn-row">
-              <button class="btn btn--ghost" type="button" :disabled="busy === 'import'" @click="ankiInput?.click()">
-                {{ busy === 'import' ? '处理中…' : '导入 Anki 文件' }}
-              </button>
-              <button class="btn btn--ghost" type="button" :disabled="busy === 'import'" @click="backupInput?.click()">
-                加载备份(还原)
-              </button>
-            </div>
-            <input ref="ankiInput" class="hidden-input" type="file" :accept="ANKI_IMPORT_ACCEPT" @change="onImportAnki" />
-            <input ref="backupInput" class="hidden-input" type="file" accept=".json,.zip,application/zip" @change="onImportBackup" />
-          </div>
-
-          <!-- 导出 -->
-          <div class="group">
-            <span class="field__label">导出</span>
-            <div class="btn-row">
-              <button class="btn btn--ghost" type="button" :disabled="busy === 'export'" @click="onExportAnki('tsv')">
-                导出 Anki TSV
-              </button>
-              <button class="btn btn--ghost" type="button" :disabled="busy === 'export'" @click="onExportAnki('csv')">
-                导出 Anki CSV
-              </button>
-            </div>
-            <div class="btn-row">
-              <button class="btn btn--ghost" type="button" :disabled="busy === 'export'" @click="onExportBackup">
-                备份全部数据(zip)
-              </button>
-            </div>
-            <p class="field__hint">
-              「备份全部数据」导出 zip 包:卡片文字、图片(独立文件)、复习进度与全部配置(AI / 复习范围 / 打卡 / 全屏)完整包含。
-              支持导入旧版 JSON 快照;文件含 API Key,请勿外传;「加载备份」会覆盖当前 AI 配置与复习范围,卡片按 id 幂等合并。
-            </p>
-          </div>
-
-          <pre v-if="lastReport" class="report">{{ lastReport }}</pre>
-
-          <!-- 示例数据:便于快速体验与演示 -->
-          <div class="group">
-            <span class="field__label">示例数据</span>
-            <p class="field__hint">
-              载入 {{ seedCount }} 张覆盖各记忆等级与到期状态的示例卡片({{ seedScope }})。
-              可重复点击,不会产生重复卡片。
-            </p>
-            <div class="btn-row">
-              <button class="btn btn--ghost" type="button" :disabled="busy === 'seed'" @click="onSeedDemo">
-                载入示例数据
-              </button>
-              <button class="btn btn--ghost" type="button" :disabled="busy === 'seed'" @click="onClearDemo">
-                移除示例数据
-              </button>
-            </div>
-          </div>
-
-          <div class="group">
-            <button class="btn btn--danger" type="button" @click="onClearAll">清空全部数据</button>
-          </div>
         </div>
       </section>
 
