@@ -28,6 +28,7 @@ import {
   constrainedOffset,
   createDragState,
   createTapDetector,
+  swipeThreshold,
   tiltForOffset,
   updateDrag,
   type DragState,
@@ -36,6 +37,7 @@ import { DURATION, EASE_OUT, EASE_OUT_SOFT, EASE_SPRING, STACK, motionDuration }
 import { hapticTap } from '~/composables/useNativeBridge'
 import { paletteFor } from '~/lib/palette'
 import ParticleLayer from '~/components/ParticleLayer.vue'
+import AnswerOverlay from '~/components/AnswerOverlay.vue'
 import { particleColor, particleCountFor } from '~/lib/particles'
 
 const props = withDefaults(
@@ -56,6 +58,8 @@ const emit = defineEmits<{
 
 const rootEl = ref<HTMLElement | null>(null)
 const particleEl = ref<InstanceType<typeof ParticleLayer> | null>(null)
+/** 全屏答案层当前展示的卡片(非 null 时全屏答案打开)。 */
+const answerCard = ref<{ card: KnowledgeCard; index: number } | null>(null)
 const slotRefs = new Map<string, HTMLElement>()
 /** 正在飞出的卡片 id —— 期间屏蔽一切新手势。 */
 const flyingId = ref<string | null>(null)
@@ -83,6 +87,15 @@ let drag: DragState | null = null
 let pointerStartAt = 0
 let mode: 'idle' | 'swipe' = 'idle'
 let rafId = 0
+/** 本次触摸起点是否落在答案滚动区(决定纵向手势是否放行给原生滚动)。 */
+let touchInScroll = false
+/**
+ * 答案层最近一次关闭的时间戳。
+ * 关闭瞬间的漏网触摸/单击(如轻点关闭后 touchend 冒泡)会在极短时间内
+ * 再触发一次单击 —— 冷却期内忽略,防止"关闭后立刻又打开"的竞态。
+ */
+let lastAnswerClosedAt = 0
+const ANSWER_CLOSE_COOLDOWN_MS = 350
 
 const viewportWidth = () => (typeof window === 'undefined' ? 375 : window.innerWidth)
 
@@ -175,22 +188,62 @@ function unfreezeDrag() {
 
 // ── 手势 ──────────────────────────────────────────────────────
 /**
- * 单击 = 翻面看答案(Anki 式先回忆后核对)。
- * 双击不做任何事(录入只能走顶部面板的「录入」按钮)——
- * 单双击仲裁仍保留:第二次快速点击会取消挂起的单击,避免误翻面。
+ * 单击 = 全屏查看答案(Anki 式先回忆后核对)。
+ * 全屏答案层内左右滑可判定,不再在小卡片内翻面。
+ * 双击不做任何事(录入只能走「录入」按钮)——单双击仲裁仍保留:
+ * 第二次快速点击会取消挂起的单击,避免误弹全屏答案。
  */
 const tapDetector = createTapDetector({
   onSingleTap: () => {
+    // 全屏答案层打开时忽略单击(防止关闭瞬间的漏网事件又把它打开)
+    if (answerCard.value) return
+    // 答案层刚关闭的冷却期内,漏网的触摸/单击不重开答案
+    if (Date.now() - lastAnswerClosedAt < ANSWER_CLOSE_COOLDOWN_MS) return
     if (!topCard.value?.back) return
-    revealed.value = !revealed.value
+    answerCard.value = { card: topCard.value, index: 0 }
     void hapticTap('light')
   },
 })
+
+/** 全屏答案层关闭:恢复卡片堆叠(卡片保持未提交)。 */
+function closeAnswer() {
+  // 关闭反馈:轻震动(与打开答案的触感对称;左右滑判定用更强的 medium)。
+  // 放在统一入口:✕ / 轻点 / 返回键 / Esc 四条通道都会经过这里,只震一次。
+  void hapticTap('light')
+  answerCard.value = null
+  lastAnswerClosedAt = Date.now()
+}
+
+/**
+ * 关闭通道:
+ *   - 右上角 ✕(AnswerOverlay 内部)
+ *   - Android 返回键(app.vue 探测 .answer 存在后派发本事件)
+ *   - 桌面 Esc(本组件 keydown)
+ */
+function onCloseAnswerRequested() {
+  closeAnswer()
+}
+
+/**
+ * 全屏答案层判定完成:复用现有提交通道。
+ * 全屏层的滑出动画已播完,这里直接走 commitSwipe 的落库/补位逻辑。
+ */
+function onAnswerReview(verdict: ReviewVerdict) {
+  const target = answerCard.value
+  answerCard.value = null
+  if (!target) return
+  // 保证提交的是刚才看的那张(顶卡可能已被别的路径处理)
+  if (target.card.id !== topCard.value?.id) return
+  void commitSwipe(verdict)
+}
 
 function onTouchStart(e: TouchEvent) {
   if (flyingId.value) return
   const t = e.touches[0]
   if (!t) return
+  // 起点是否落在卡片可滚动内容区(翻面后的答案/图片区)
+  const target = e.target as HTMLElement | null
+  touchInScroll = Boolean(target?.closest?.('.card__scroll'))
   drag = createDragState(t.clientX, t.clientY)
   pointerStartAt = performance.now()
   mode = 'idle'
@@ -205,15 +258,20 @@ function onTouchMove(e: TouchEvent) {
   drag = updateDrag(drag, t.clientX, t.clientY)
   const vw = viewportWidth()
 
-  // 方向锁判定:横移 → 滑动;纵移 → 直接吞掉(首页无下拉功能,不产生位移与反馈)
+  // 方向锁判定:横移 → 滑动;纵移 → 默认吞掉(首页无下拉功能)
   if (mode === 'idle' && drag.locked !== 'none') {
     if (drag.locked === 'horizontal') {
       mode = 'swipe'
     } else {
+      const wasDragging = drag !== null
       mode = 'idle'
       drag = null
       dragging.value = false
-      // 吞掉纵向手势,避免触发 WebView 下拉回弹/刷新
+      if (wasDragging && touchInScroll) {
+        // 起点在答案滚动区内:放行,让浏览器原生滚动接管
+        return
+      }
+      // 否则吞掉纵向手势,避免触发 WebView 下拉回弹/刷新
       e.preventDefault()
       return
     }
@@ -270,7 +328,7 @@ function flushRender() {
 
 /** 越过阈值后阻尼递增,避免无限拖拽。 */
 function applyResistance(value: number, vw: number): number {
-  const threshold = vw / 3
+  const threshold = swipeThreshold(vw)
   const abs = Math.abs(value)
   if (abs <= threshold) return value
   const sign = Math.sign(value)
@@ -298,8 +356,8 @@ function onTouchEnd(e: TouchEvent) {
   const elapsed = performance.now() - pointerStartAt
 
   if (wasMode === 'swipe') {
-    // ── 判定:右滑 pass / 左滑 fail ──
-    const committed = Math.abs(state.dx) >= vw / 3
+    // ── 判定:右滑 pass / 左滑 fail(阈值横屏封顶,横竖屏手感一致)
+    const committed = Math.abs(state.dx) >= swipeThreshold(vw)
     if (committed) {
       void commitSwipe(state.dx > 0 ? 'pass' : 'fail')
       mode = 'idle'
@@ -545,16 +603,24 @@ watch(
   },
 )
 
-/** 键盘可达性:桌面调试用 → / ← 也可以提交。 */
+/** 键盘可达性:桌面调试用 → / ← 提交,Esc 关闭全屏答案。 */
 function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && answerCard.value) {
+    closeAnswer()
+    return
+  }
   if (e.key === 'ArrowRight') void commitSwipe('pass')
   else if (e.key === 'ArrowLeft') void commitSwipe('fail')
   else if (e.key === 'Enter') emit('compose')
 }
 
-onMounted(() => window.addEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  window.addEventListener('abdrop:close-answer', onCloseAnswerRequested)
+})
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('abdrop:close-answer', onCloseAnswerRequested)
   cancelAnimationFrame(rafId)
   if (renderRaf) cancelAnimationFrame(renderRaf)
   particleEl.value?.stop()
@@ -577,6 +643,9 @@ defineExpose({ commitSwipe, snapBack, revealed, emitParticles })
   >
     <!-- 消散粒子层:位于卡片之上,只占一个合成层 -->
     <ParticleLayer ref="particleEl" />
+
+    <!-- 桌面氛围光:卡片背后的静态光斑,增强立体感而不干扰手势 -->
+    <div class="stack__glow" aria-hidden="true" />
 
     <div
       v-for="(card, i) in visibleCards"
@@ -650,9 +719,26 @@ defineExpose({ commitSwipe, snapBack, revealed, emitParticles })
 
     <!-- 空态 -->
     <div v-if="!visibleCards.length" class="empty">
+      <svg class="empty__icon" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <rect x="10" y="14" width="44" height="30" rx="6" fill="rgba(255,255,255,0.9)" stroke="rgba(27,36,48,0.14)" stroke-width="1.5" />
+        <rect x="16" y="20" width="32" height="4" rx="2" fill="rgba(27,36,48,0.18)" />
+        <rect x="16" y="28" width="24" height="3" rx="1.5" fill="rgba(27,36,48,0.12)" />
+        <rect x="16" y="35" width="18" height="3" rx="1.5" fill="rgba(27,36,48,0.08)" />
+        <rect x="3" y="34" width="44" height="30" rx="6" fill="rgba(255,255,255,0.75)" stroke="rgba(27,36,48,0.1)" stroke-width="1.5" transform="rotate(-6 25 49)" />
+      </svg>
       <p class="empty__title">暂无待复习卡片</p>
       <p class="empty__hint">点右下角齿轮,到设置页录入知识点</p>
     </div>
+
+    <!-- 全屏答案层:单击卡片打开,答案/图文全屏可滚动,左右滑判定 -->
+    <AnswerOverlay
+      v-if="answerCard"
+      :card="answerCard.card"
+      :collection-name="props.collectionNameOf(answerCard.card)"
+      :palette-index="props.paletteIndexOf(answerCard.card)"
+      @close="closeAnswer"
+      @review="onAnswerReview"
+    />
   </section>
 </template>
 
@@ -663,8 +749,40 @@ defineExpose({ commitSwipe, snapBack, revealed, emitParticles })
   /* 3D 透视:堆叠层级靠 Z 轴拉开 */
   perspective: 1200px;
   perspective-origin: 50% 40%;
-  touch-action: none;
+  /*
+   * pan-y:横向手势一律归卡片跟手;纵向在滚动区由浏览器原生滚动接管。
+   * 不能写 none —— 否则翻面后答案区的 overflow 滚动永远滚不动(显示不全的根因之一)。
+   * 非滚动区的纵向手势仍由 JS 吞掉(getFirst 触摸目标判断),见 onTouchMove。
+   */
+  touch-action: pan-y;
   overflow: hidden;
+  /* 首次挂载:整叠卡片轻盈浮起(一次性,不参与跟手);backwards 保证结束后无残留 transform */
+  animation: stack-in 420ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+@keyframes stack-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/*
+ * 桌面氛围光:卡片正后方一团柔和光斑 + 底部环境反光。
+ * 静态绘制,零逐帧成本;给堆叠一点"悬浮在光里"的立体感。
+ */
+.stack__glow {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(46% 32% at 50% 44%, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 100%),
+    radial-gradient(40% 26% at 50% 72%, rgba(15, 23, 42, 0.07), rgba(15, 23, 42, 0) 100%);
 }
 
 .stack__slot {
@@ -714,7 +832,7 @@ defineExpose({ commitSwipe, snapBack, revealed, emitParticles })
 
 
 /* 横屏:透视拉近一点,避免小卡片上视差过冲 */
-@media (orientation: landscape) and (max-height: 500px) {
+@media (orientation: landscape) {
   .stack {
     perspective: 900px;
   }
@@ -770,9 +888,15 @@ defineExpose({ commitSwipe, snapBack, revealed, emitParticles })
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
   /* 容器不拦截手势:空态点位让触摸事件全部流过(单击翻面仍由 CardStack 处理) */
   pointer-events: none;
+}
+
+.empty__icon {
+  margin-bottom: 4px;
+  filter: drop-shadow(0 8px 14px rgba(15, 23, 42, 0.08));
+  opacity: 0.92;
 }
 
 .empty__title {

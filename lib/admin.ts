@@ -75,6 +75,7 @@ export function resetCard(
     reviewCount: 0,
     passCount: 0,
     failCount: 0,
+    consecutiveFails: 0,
     updatedAt: now,
   }
 }

@@ -13,10 +13,14 @@
    ══════════════════════════════════════════════════════════════ */
 
 :root {
-  /* 背景:低饱和浅灰渐变 */
-  --bg-top: #f4f6f8;
-  --bg-mid: #eef1f4;
-  --bg-bottom: #e6eaee;
+  /* 背景:低饱和浅灰渐变(美化版:层次更分明,顶部偏亮、底部微沉) */
+  --bg-top: #f7f9fb;
+  --bg-mid: #eef2f6;
+  --bg-bottom: #e2e8ee;
+
+  /* 环境光晕(静态 radial-gradient 叠加,低饱和、零动画成本) */
+  --glow-a: rgba(99, 140, 190, 0.14); /* 冷蓝 */
+  --glow-b: rgba(158, 128, 205, 0.12); /* 淡紫 */
 
   /* 卡片表面 */
   --card-bg: rgba(255, 255, 255, 0.72);
@@ -53,7 +57,7 @@
    */
   --kb-inset: 0px;
 
-  --radius-card: 12px;
+  --radius-card: 16px;
   --radius-sheet: 20px;
 
   /**
@@ -103,7 +107,15 @@ body {
   height: 100%;
   height: 100vh;
   height: 100dvh;
-  background: linear-gradient(170deg, var(--bg-top) 0%, var(--bg-mid) 46%, var(--bg-bottom) 100%);
+  /*
+   * 背景:低饱和浅灰渐变之上,叠加两团极淡的环境光晕。
+   * 全部是静态绘制(radial-gradient 不参与逐帧合成),零性能成本;
+   * 光晕色取自调色盘家族,保持整体低饱和、不喧宾夺主。
+   */
+  background:
+    radial-gradient(72% 52% at 84% -6%, var(--glow-a), transparent 62%),
+    radial-gradient(66% 48% at 2% 106%, var(--glow-b), transparent 62%),
+    linear-gradient(166deg, var(--bg-top) 0%, var(--bg-mid) 52%, var(--bg-bottom) 100%);
   background-attachment: fixed;
   color: var(--ink-1);
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
@@ -204,6 +216,101 @@ img {
   backface-visibility: hidden;
 }
 
+/* ── Markdown 正文(md-body):全屏答案 / 卡片背面共用 ──────── */
+.md-body {
+  word-break: break-word;
+}
+
+.md-body p {
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+  line-height: 1.62;
+}
+
+.md-body p:last-child {
+  margin-bottom: 0;
+}
+
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4,
+.md-body h5,
+.md-body h6 {
+  margin: 14px 0 8px;
+  line-height: 1.35;
+  color: var(--ink-1);
+}
+.md-body h1 {
+  font-size: 22px;
+}
+.md-body h2 {
+  font-size: 20px;
+}
+.md-body h3 {
+  font-size: 18px;
+}
+.md-body h4,
+.md-body h5,
+.md-body h6 {
+  font-size: 16px;
+}
+
+.md-body ul,
+.md-body ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+
+.md-body li {
+  margin: 4px 0;
+}
+
+.md-body code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: rgba(27, 36, 48, 0.07);
+  border-radius: 5px;
+  padding: 2px 5px;
+}
+
+.md-body pre {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(27, 36, 48, 0.06);
+  overflow-x: auto;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.md-body pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.md-body blockquote {
+  margin: 0 0 12px;
+  padding: 8px 14px;
+  border-left: 3px solid var(--ink-3);
+  color: var(--ink-2);
+  background: rgba(27, 36, 48, 0.04);
+  border-radius: 0 8px 8px 0;
+}
+
+.md-body a {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md-body hr {
+  border: none;
+  border-top: 1px solid rgba(27, 36, 48, 0.12);
+  margin: 14px 0;
+}
+
 /* ── 宽屏(平板 / 桌面浏览器):卡片不再随屏幕无限放大 ──────── */
 @media (min-width: 640px) {
   :root {
@@ -213,11 +320,19 @@ img {
   }
 }
 
-/* ── 矮屏 / 横屏:竖向空间紧张,压缩卡片高度 ────────────────── */
-@media (orientation: landscape) and (max-height: 500px) {
+/* ── 横屏:竖向空间紧张,卡片高度最大化让给视口 ───────────── */
+@media (orientation: landscape) {
   :root {
-    --card-w: min(46vw, 280px);
-    --card-h: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 104px);
+    --card-w: min(60vw, 340px);
+    /*
+     * 横屏视口高度只有竖屏宽度(≈390px),若不压到极致,卡片永远
+     * 矮于竖屏的 356px —— 这就是"横屏卡片没变高"的根因。
+     * 预留给 HUD 的 72px 是白让出去的:胶囊/齿轮都是 absolute
+     * 悬浮层,不占卡片空间,卡片顶满后它们自然浮在卡片之上。
+     * 只留 16px 呼吸边距,vh 先行 + dvh 覆盖兜底老内核。
+     */
+    --card-h: calc(100vh - var(--safe-top) - var(--safe-bottom) - 16px);
+    --card-h: min(calc(100dvh - var(--safe-top) - var(--safe-bottom) - 16px), 460px);
   }
 }
 

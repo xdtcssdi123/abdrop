@@ -52,6 +52,44 @@ export function computeViewport(
   return { keyboardInset: open ? inset : 0, keyboardOpen: open }
 }
 
+/**
+ * 横屏时的卡片尺寸(px)。
+ *
+ * 为什么在 JS 里算而不是只靠 CSS 媒体查询:
+ *   部分 Android WebView / 分屏 / 大屏设备的横屏媒体查询不触发,
+ *   导致卡片高度永远不按横屏规则变化。JS 直接测宽高比再写到
+ *   内联 CSS 变量,优先级最高,环境无关,必然生效。
+ * 数值与 main.css 横屏媒体查询保持一致(min(60vw,340) / min(100vh-16,460))。
+ *
+ * @returns 横屏时卡片宽高;竖屏返回 null(CSS :root 默认值接管)
+ */
+export function cardSizeForLandscape(
+  viewportWidth: number,
+  viewportHeight: number,
+): { width: number; height: number } | null {
+  // 竖屏或正方形:不干预,交给 CSS
+  if (viewportWidth <= viewportHeight) return null
+  return {
+    width: Math.min(viewportWidth * 0.6, 340),
+    // 下限保护:极端矮视口(分屏/键盘)也不产生负高度
+    height: Math.min(Math.max(viewportHeight - 16, 0), 460),
+  }
+}
+
+/** 把横屏卡片尺寸写入内联 CSS 变量(竖屏时移除,恢复 CSS 默认)。 */
+function applyCardSize(viewportWidth: number, viewportHeight: number): void {
+  if (typeof document === 'undefined') return
+  const root = document.documentElement
+  const size = cardSizeForLandscape(viewportWidth, viewportHeight)
+  if (!size) {
+    root.style.removeProperty('--card-h')
+    root.style.removeProperty('--card-w')
+    return
+  }
+  root.style.setProperty('--card-h', `${Math.round(size.height)}px`)
+  root.style.setProperty('--card-w', `${Math.round(size.width)}px`)
+}
+
 /** 把视口信息写入 CSS 变量。 */
 function applyToCSS(info: ViewportInfo): void {
   if (typeof document === 'undefined') return
@@ -75,16 +113,19 @@ export function startViewportTracking(): () => void {
     cancelAnimationFrame(raf)
     raf = requestAnimationFrame(() => {
       const layoutHeight = window.innerHeight
+      const layoutWidth = window.innerWidth
       const visualHeight = vv?.height ?? layoutHeight
       const { keyboardInset, keyboardOpen: open } = computeViewport(layoutHeight, visualHeight)
 
       keyboardOpen.value = open
       applyToCSS({
         height: layoutHeight,
-        width: window.innerWidth,
+        width: layoutWidth,
         keyboardInset,
         keyboardOpen: open,
       })
+      // 横屏时内联卡片尺寸(竖屏时移除,交还 CSS 定义)
+      applyCardSize(layoutWidth, layoutHeight)
     })
   }
 
@@ -105,6 +146,8 @@ export function startViewportTracking(): () => void {
     if (typeof document !== 'undefined') {
       document.documentElement.classList.remove('kb-open')
       document.documentElement.style.removeProperty('--kb-inset')
+      document.documentElement.style.removeProperty('--card-h')
+      document.documentElement.style.removeProperty('--card-w')
     }
   }
 }

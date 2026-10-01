@@ -67,6 +67,19 @@ export function useCheckinState() {
     void hapticTap('medium')
   }
 
+  /**
+   * 重置打卡状态(管理员页「完全重新开始」调用)。
+   *
+   * 只清「今日已打卡」的日期记录,回到未打卡状态:
+   *   - 提醒配置(开关/时间段)是用户偏好,不属于打卡进度,不重置;
+   *   - 系统后台通知由首页 onMounted 的 scheduleNotificationsIfNeeded
+   *     重新排,这里不重复调度(避免在管理页引入通知副作用)。
+   */
+  async function resetCheckin(): Promise<void> {
+    lastCheckinDate.value = null
+    await setStoredValue(CHECKIN_DATE_KEY, '')
+  }
+
   /** 更新提醒配置:立即持久化,并按新窗口重排系统通知。 */
   async function updateConfig(next: Partial<CheckinConfig>): Promise<void> {
     config.value = { ...config.value, ...next }
@@ -133,6 +146,7 @@ export function useCheckinState() {
     checkedInToday,
     load,
     checkIn,
+    resetCheckin,
     updateConfig,
     scheduleNotificationsIfNeeded,
   }

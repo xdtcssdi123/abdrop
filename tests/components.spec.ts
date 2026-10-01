@@ -83,7 +83,7 @@ describe('KnowledgeCard 渲染', () => {
   })
 
   it('记忆等级驱动进度条宽度', () => {
-    const w = mount(KnowledgeCard, { props: { card: makeCard({ level: 5 }) } })
+    const w = mount(KnowledgeCard, { props: { card: makeCard({ level: 7 }) } })
     const fill = w.find('.meter__fill')
     expect(fill.attributes('style')).toContain('width: 100%')
   })

@@ -12,7 +12,7 @@
  */
 
 /** Ebbinghaus 记忆阶梯等级。 */
-export type MemoryLevel = 0 | 1 | 2 | 3 | 4 | 5
+export type MemoryLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 
 /** Anki 卡片状态(与 Anki `cards.type` 语义一致)。 */
 export type AnkiSyncState = 'new' | 'learning' | 'review' | 'relearning'
@@ -65,6 +65,8 @@ export interface KnowledgeCard {
   passCount: number
   /** 累计「待复习」左滑次数 */
   failCount: number
+  /** 同一张卡连续答错次数(答对即清零);≥3 时顺延到隔日(2 天) */
+  consecutiveFails: number
 
   // ── 媒体与溯源 ──────────────────────────────────────────
   /** 图片本地路径或 dataURL(base64),无图为空串 */
@@ -118,6 +120,8 @@ export interface AIConfig {
   model: string
   /** 单次请求超时(ms) */
   timeoutMs: number
+  /** 是否启用图片识别:归纳时把录入框的图片一并发送给模型 */
+  vision: boolean
   /** 最近一次连通性测试是否通过 */
   lastTestOk: boolean | null
   lastTestedAt: number

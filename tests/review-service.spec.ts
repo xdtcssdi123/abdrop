@@ -13,7 +13,7 @@ import {
 } from '~/lib/review-service'
 import { createMemoryRepository, type CardRepository, DEFAULT_COLLECTION_ID } from '~/lib/db'
 import { ALL_COLLECTIONS_ID } from '~/lib/db-constants'
-import { DAY_MS } from '~/lib/srs'
+import { DAY_MS, HOUR_MS, MINUTE_MS } from '~/lib/srs'
 
 let repo: CardRepository
 let service: ReviewService
@@ -79,7 +79,7 @@ describe('commitReview', () => {
     // 确认真的写进了仓储,而不是只改了内存对象
     const stored = await repo.getCard(card.id)
     expect(stored?.level).toBe(1)
-    expect(stored?.nextReviewAt).toBe(now + DAY_MS)
+    expect(stored?.nextReviewAt).toBe(now + 20 * MINUTE_MS)
   })
 
   it('左滑把卡片推回待复习', async () => {
@@ -163,49 +163,58 @@ describe('队列辅助纯函数', () => {
 })
 
 describe('端到端:录入到复习的完整链路', () => {
-  it('录入 → 出现在池中 → 右滑 → 阶梯推进 → 到期日逐步拉长', async () => {
+  it('录入 → 出现在池中 → 右滑 → 阶梯推进 → 到期间隔逐步拉长', async () => {
     let now = 1_700_000_000_000
     const card = await service.addCard({ front: '什么是导数', back: '瞬时变化率' }, now)
 
     // 新卡立即可复习
     expect(await service.loadPool(ALL_COLLECTIONS_ID, now)).toHaveLength(1)
 
-    // 连续 5 次答对,间隔按 1、2、4、7、15 天推进
-    const expectedIntervals = [1, 2, 4, 7, 15]
-    for (let i = 0; i < 5; i++) {
+    // 连续 7 次答对,间隔按经典艾宾浩斯表推进
+    // (等级 1-7 每级都是上一次复习后推进;用相对间隔验证单调拉长)
+    const expectedMs = [
+      20 * MINUTE_MS,
+      1 * HOUR_MS,
+      9 * HOUR_MS,
+      1 * DAY_MS,
+      2 * DAY_MS,
+      6 * DAY_MS,
+      31 * DAY_MS,
+    ]
+    for (let i = 0; i < 7; i++) {
       const due = await service.loadPool(ALL_COLLECTIONS_ID, now)
       expect(due).toHaveLength(1)
 
       const reviewed = await service.commitReview(due[0]!, 'pass', now)
-      expect(reviewed.intervalDays).toBe(expectedIntervals[i])
+      expect(reviewed.nextReviewAt - reviewed.lastReviewedAt).toBe(expectedMs[i])
 
       // 未到下次到期时间,池中不应再出现
       expect(await service.loadPool(ALL_COLLECTIONS_ID, now)).toHaveLength(0)
 
-      // 时间推进到下次复习日,卡片重新出现
+      // 时间推进到下次复习点,卡片重新出现
       now = reviewed.nextReviewAt
       expect(await service.loadPool(ALL_COLLECTIONS_ID, now)).toHaveLength(1)
     }
 
     const final = await repo.getCard(card.id)
-    expect(final?.level).toBe(5)
-    expect(final?.reviewCount).toBe(5)
-    expect(final?.passCount).toBe(5)
+    expect(final?.level).toBe(7)
+    expect(final?.reviewCount).toBe(7)
+    expect(final?.passCount).toBe(7)
   })
 
-  it('答错一次使卡片回到 1 天间隔,并记录遗忘', async () => {
+  it('答错一次使卡片回到第 1 档(20 分钟)重走,并记录遗忘', async () => {
     const now = 1_700_000_000_000
     const card = await service.addCard({ front: 'Q' }, now)
 
-    // 先答对三次,升到等级 3(4 天)
+    // 先答对三次,升到等级 3(9 小时档)
     let current = card
     for (let i = 0; i < 3; i++) current = await service.commitReview(current, 'pass', now)
     expect(current.level).toBe(3)
 
-    // 再答错 → 回到 1 天
+    // 再答错 → 回第 1 档,20 分钟后重走
     const failed = await service.commitReview(current, 'fail', now)
     expect(failed.level).toBe(1)
-    expect(failed.intervalDays).toBe(1)
+    expect(failed.nextReviewAt).toBe(now + 20 * MINUTE_MS)
     expect(failed.failCount).toBe(1)
     expect(failed.lapses).toBe(1)
   })

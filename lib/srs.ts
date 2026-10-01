@@ -18,12 +18,27 @@ import type {
 } from '~/types'
 
 export const DAY_MS = 24 * 60 * 60 * 1000
+export const HOUR_MS = 60 * 60 * 1000
+export const MINUTE_MS = 60 * 1000
 
-/** Ebbinghaus 阶梯间隔(天):等级 N → 间隔。 */
-export const INTERVALS_DAYS = [0, 1, 2, 4, 7, 15] as const
+/**
+ * 经典艾宾浩斯记忆法复习间隔(毫秒):等级 N → 间隔。
+ * 完整正版表:学习后 20 分钟 → 1 小时 → 9 小时 → 1 天 → 2 天 → 6 天 → 31 天。
+ * 等级 0 = 新卡(录入即出现)。
+ */
+export const INTERVALS_MS = [
+  0,
+  20 * MINUTE_MS,
+  1 * HOUR_MS,
+  9 * HOUR_MS,
+  1 * DAY_MS,
+  2 * DAY_MS,
+  6 * DAY_MS,
+  31 * DAY_MS,
+] as const
 
 /** 等级上限。 */
-export const MAX_LEVEL = 5 as const
+export const MAX_LEVEL = 7 as const
 
 /** Anki 默认难度因子(千分制)。 */
 export const DEFAULT_EASE = 2500
@@ -34,32 +49,35 @@ export const MIN_EASE = 1300
 /** 遗忘时的因子惩罚。 */
 export const EASE_PENALTY = 200
 
-/** 取某个等级对应的间隔天数。 */
-export function intervalDaysForLevel(level: MemoryLevel): number {
-  const idx = Math.max(0, Math.min(level, MAX_LEVEL))
-  return INTERVALS_DAYS[idx] as number
-}
-
 /** 取某个等级对应的间隔毫秒数。 */
 export function intervalMsForLevel(level: MemoryLevel): number {
-  return intervalDaysForLevel(level) * DAY_MS
+  const idx = Math.max(0, Math.min(level, MAX_LEVEL))
+  return INTERVALS_MS[idx] as number
+}
+
+/**
+ * 取某个等级对应的间隔「整天数」。
+ * 分钟/小时档(第 1–3 档)不足一天返回 0 —— 仅用于 Anki ivl 近似与展示,
+ * 真实调度一律走 `intervalMsForLevel`。
+ */
+export function intervalDaysForLevel(level: MemoryLevel): number {
+  return Math.round(intervalMsForLevel(level) / DAY_MS)
 }
 
 /**
  * 由等级推导 Anki 卡片状态。
- * 等级 0 = new;1–2 = learning;3 及以上 = review。
+ * 等级 0 = new;1–3(当天内 20min/1h/9h)= learning;4 及以上(1d+) = review。
  */
 export function stateForLevel(level: MemoryLevel): AnkiSyncState {
   if (level <= 0) return 'new'
-  if (level <= 2) return 'learning'
+  if (level <= 3) return 'learning'
   return 'review'
 }
 
 /**
  * 推进记忆等级。
- * 右滑(pass)  → +1,封顶 5。
- * 左滑(fail)  → 回到 1(重走阶梯,而不是清零到 new,
- *                避免刚复习完的卡立刻又刷屏)。
+ * 右滑(pass)  → +1,封顶 7(31 天)。
+ * 左滑(fail)  → 回到 1(第 1 档:20 分钟后重走,经典记忆法"重新学习")。
  */
 export function nextLevel(current: MemoryLevel, verdict: ReviewVerdict): MemoryLevel {
   if (verdict === 'pass') return Math.min(current + 1, MAX_LEVEL) as MemoryLevel
@@ -81,6 +99,8 @@ export interface ScheduleResult {
   syncState: AnkiSyncState
   lapses: number
   nextReviewAt: number
+  /** 新的连续失败计数(答对清零,答错 +1) */
+  consecutiveFails: number
 }
 
 /**
@@ -91,6 +111,7 @@ export interface ScheduleResult {
  * @param lapses   当前遗忘次数
  * @param verdict  滑动判定
  * @param now      时间基准
+ * @param consecutiveFails 当前连续失败计数(答对清零,答错 +1)
  */
 export function schedule(
   level: MemoryLevel,
@@ -98,20 +119,23 @@ export function schedule(
   lapses: number,
   verdict: ReviewVerdict,
   now: number = Date.now(),
+  consecutiveFails = 0,
 ): ScheduleResult {
   const safeEase = Number.isFinite(ease) && ease > 0 ? ease : DEFAULT_EASE
   const nextLvl = nextLevel(level, verdict)
-  const intervalDays = intervalDaysForLevel(nextLvl)
 
   let nextEase = safeEase
   let nextLapses = lapses
   let syncState = stateForLevel(nextLvl)
+  let nextConsecutiveFails = 0
 
   if (verdict === 'fail') {
     // 遗忘:因子下调,并标记为 relearning(下次答对即回 learning/review)
     nextEase = Math.max(MIN_EASE, safeEase - EASE_PENALTY)
     nextLapses = lapses + 1
     syncState = 'relearning'
+    // 连续失败阶梯:答错累计;同一张卡连续错满 3 次(中途答对清零)顺延到次日
+    nextConsecutiveFails = consecutiveFails + 1
   } else if (level <= 0) {
     // 新卡首次答对
     syncState = 'learning'
@@ -120,13 +144,23 @@ export function schedule(
     nextEase = Math.min(4000, safeEase + 100)
   }
 
+  // 答对 → 连续失败计数清零(已在上方初始化)
+  if (verdict !== 'fail') nextConsecutiveFails = 0
+
+  // 间隔:经典艾宾浩斯表按等级走毫秒;但连续错满 3 次的顽固卡顺延到次日(24h)
+  const baseIntervalMs = intervalMsForLevel(nextLvl)
+  const effectiveIntervalMs =
+    verdict === 'fail' && nextConsecutiveFails >= 3 ? DAY_MS : baseIntervalMs
+
   return {
     level: nextLvl,
-    intervalDays,
+    // intervalDays 仅用于 Anki ivl 近似/展示;不足 1 天记 0
+    intervalDays: Math.round(effectiveIntervalMs / DAY_MS),
     ease: nextEase,
     syncState,
     lapses: nextLapses,
-    nextReviewAt: now + intervalDays * DAY_MS,
+    nextReviewAt: now + effectiveIntervalMs,
+    consecutiveFails: nextConsecutiveFails,
   }
 }
 
@@ -138,7 +172,14 @@ export function scheduleReview(
   verdict: ReviewVerdict,
   now: number = Date.now(),
 ): KnowledgeCard {
-  const result = schedule(card.level, card.ease, card.lapses, verdict, now)
+  const result = schedule(
+    card.level,
+    card.ease,
+    card.lapses,
+    verdict,
+    now,
+    card.consecutiveFails ?? 0,
+  )
   return {
     ...card,
     level: result.level,
@@ -146,6 +187,7 @@ export function scheduleReview(
     ease: result.ease,
     syncState: result.syncState,
     lapses: result.lapses,
+    consecutiveFails: result.consecutiveFails,
     nextReviewAt: result.nextReviewAt,
     lastReviewedAt: now,
     reviewCount: card.reviewCount + 1,
@@ -188,6 +230,9 @@ export function describeDue(card: KnowledgeCard, now: number = Date.now()): stri
     if (overdueDays <= 0) return '待复习'
     return `逾期 ${overdueDays} 天`
   }
+  // 新表含当天短间隔:不足 1 天按分钟/小时描述
+  if (diff < HOUR_MS) return `${Math.max(1, Math.ceil(diff / MINUTE_MS))} 分钟后`
+  if (diff < DAY_MS) return `${Math.ceil(diff / HOUR_MS)} 小时后`
   const days = Math.ceil(diff / DAY_MS)
   return `${days} 天后`
 }
@@ -214,13 +259,16 @@ export function syncStateLabel(state: AnkiSyncState): string {
 
 /**
  * 从 Anki 的调度字段反推 Ebbinghaus 等级。
- * 导入 .apkg 时使用:把 Anki 的 ivl/type 投影到最近的阶梯档位。
+ * 导入 .apkg 时使用:把 Anki 的 ivl(整天)投影到最近的阶梯档位。
+ *
+ * 新表的天级档位:1天→4 级,2天→5 级,6天→6 级,31天→7 级;
+ * 不足 1 天(学习卡)→ 1 级(20 分钟档重走)。
  */
 export function levelFromAnki(intervalDays: number, ankiType: number): MemoryLevel {
   if (ankiType === 0 && intervalDays <= 0) return 0
-  if (intervalDays <= 1) return 1
-  if (intervalDays <= 2) return 2
-  if (intervalDays <= 4) return 3
-  if (intervalDays <= 7) return 4
-  return 5
+  if (intervalDays <= 0) return 1
+  if (intervalDays <= 1) return 4
+  if (intervalDays <= 2) return 5
+  if (intervalDays <= 6) return 6
+  return 7
 }

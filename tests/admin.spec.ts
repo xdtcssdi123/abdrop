@@ -17,7 +17,7 @@ import {
 } from '~/lib/admin'
 import { createMemoryRepository, DEFAULT_COLLECTION_ID, type CardRepository } from '~/lib/db'
 import { ALL_COLLECTIONS_ID } from '~/lib/db-constants'
-import { DEFAULT_EASE, DAY_MS } from '~/lib/srs'
+import { DEFAULT_EASE, DAY_MS, MINUTE_MS } from '~/lib/srs'
 import type { Collection, KnowledgeCard, MemoryLevel } from '~/types'
 
 const NOW = 1_700_000_000_000
@@ -43,6 +43,7 @@ async function makeProgressedCard(
     reviewCount: 9,
     passCount: 7,
     failCount: 2,
+    consecutiveFails: 0,
     lastReviewedAt: NOW - DAY_MS,
     // 关键:有未来计时,才需要"清除计时"
     nextReviewAt: NOW + 7 * DAY_MS,
@@ -331,7 +332,7 @@ describe('resetCards 批量执行', () => {
     const stored = await repo.getCard(card.id)
     expect(stored!.level).toBe(1)
     expect(stored!.reviewCount).toBe(1)
-    expect(stored!.nextReviewAt).toBe(NOW + DAY_MS)
+    expect(stored!.nextReviewAt).toBe(NOW + 20 * MINUTE_MS)
   })
 
   it('报告里带上范围标签,便于回显', async () => {

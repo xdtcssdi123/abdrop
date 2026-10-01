@@ -13,7 +13,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import type { AIConfig, Collection } from '~/types'
 import { summarizeKnowledge } from '~/lib/ai'
 import { firstLine } from '~/lib/ai'
-import { captureImage } from '~/composables/useNativeBridge'
+import { captureImage, platformFetch } from '~/composables/useNativeBridge'
 import { scrollIntoViewOnKeyboard } from '~/composables/useViewport'
 
 const props = defineProps<{
@@ -101,15 +101,21 @@ async function onSummarize() {
     return
   }
   const text = sourceText.value.trim()
-  if (!text) {
-    aiError.value = '请先输入知识点原文'
+  const image = imageUri.value
+  // 有文字或有图片(且开启识别)即可归纳
+  const canRecognize = Boolean(text || (image && props.aiConfig.vision))
+  if (!canRecognize) {
+    aiError.value = image && !props.aiConfig.vision
+      ? '已选图片但未开启识别图片 —— 到设置页打开「识别图片」'
+      : '请先输入知识点原文,或拍照后开启图片识别'
     return
   }
 
   summarizing.value = true
   try {
-    const result = await summarizeKnowledge(text, props.aiConfig)
+    const result = await summarizeKnowledge(text, props.aiConfig, platformFetch, image)
     if (result.ok) {
+      // 图片识别:正面无文字时用模型回的背面首句兜底
       front.value = result.data.front
       back.value = result.data.back
       // 关键词自动并进标签(已填写的标签不覆盖)

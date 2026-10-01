@@ -127,7 +127,8 @@ describe('buildSeedCards', () => {
   it('间隔天数由等级推导,保持自洽', () => {
     const cards = buildSeedCards(SEED_SPECS, nameToId, NOW)
     const level5 = cards.find((c) => c.level === 5)!
-    expect(level5.intervalDays).toBe(15)
+    // 新表等级 5 = 2 天档
+    expect(level5.intervalDays).toBe(2)
     const level0 = cards.find((c) => c.level === 0)!
     expect(level0.intervalDays).toBe(0)
   })

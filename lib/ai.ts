@@ -19,6 +19,7 @@ export const DEFAULT_AI_CONFIG: AIConfig = {
   apiKey: '',
   model: 'gpt-4o-mini',
   timeoutMs: 20000,
+  vision: false,
   lastTestOk: null,
   lastTestedAt: 0,
   lastTestMessage: '',
@@ -99,14 +100,43 @@ export function normalizeBaseUrl(baseUrl: string): string {
  *   - `baseUrl` 非空 → **完全尊重用户输入**,即使它指向另一个服务商。
  *     很多用户的 "OpenAI" 其实接了自建网关或第三方兼容服务,猜测会误伤。
  */
-export function effectiveBaseUrl(config: AIConfig): string {
+export function effectiveBaseUrl(config: Pick<AIConfig, 'provider' | 'baseUrl'>): string {
   const raw = normalizeBaseUrl(config.baseUrl)
   if (raw) return raw
   return normalizeBaseUrl(PROVIDER_PRESETS[config.provider]?.baseUrl ?? '')
 }
 
-/** 构造 AI 请求计划(纯函数)。 */
-export function buildRequest(rawText: string, config: AIConfig): AIRequestPlan {
+/**
+ * 解析 dataURL 为 { mime, base64 }。
+ * 用于把图片发给多模态模型(OpenAI image_url / Anthropic image source)。
+ */
+export function parseDataUrl(dataUrl: string): { mime: string; base64: string } {
+  const m = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl.trim())
+  if (!m) return { mime: 'image/jpeg', base64: dataUrl }
+  return { mime: m[1]!, base64: m[2]! }
+}
+
+/** OpenAI 形态的 user content:纯文本 → 字符串;带图 → 多模态数组。 */
+function openAIUserContent(rawText: string, imageUrl: string): string | Array<Record<string, unknown>> {
+  if (!imageUrl) return rawText
+  return [
+    { type: 'text', text: rawText || '请识别图片中的知识点并整理成卡片' },
+    { type: 'image_url', image_url: { url: imageUrl } },
+  ]
+}
+
+/** Anthropic 形态的 user content:纯文本 → 字符串;带图 → content 数组。 */
+function anthropicUserContent(rawText: string, imageUrl: string): string | Array<Record<string, unknown>> {
+  if (!imageUrl) return rawText
+  const { mime, base64 } = parseDataUrl(imageUrl)
+  return [
+    { type: 'text', text: rawText || '请识别图片中的知识点并整理成卡片' },
+    { type: 'image', source: { type: 'base64', media_type: mime, data: base64 } },
+  ]
+}
+
+/** 构造 AI 请求计划(纯函数)。imageUrl 传入可识别图片(dataURL)。 */
+export function buildRequest(rawText: string, config: AIConfig, imageUrl = ''): AIRequestPlan {
   const base = effectiveBaseUrl(config)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -125,7 +155,7 @@ export function buildRequest(rawText: string, config: AIConfig): AIRequestPlan {
         model: config.model,
         max_tokens: 1024,
         system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: rawText }],
+        messages: [{ role: 'user', content: anthropicUserContent(rawText, imageUrl) }],
       }),
     }
   }
@@ -140,7 +170,7 @@ export function buildRequest(rawText: string, config: AIConfig): AIRequestPlan {
       temperature: 0.2,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: rawText },
+        { role: 'user', content: openAIUserContent(rawText, imageUrl) },
       ],
     }),
   }
@@ -261,22 +291,107 @@ function extractText(payload: unknown): string {
 /** 归纳结果(带错误信息)。 */
 export type SummarizeResult = { ok: true; data: AISummary } | { ok: false; error: string }
 
+/** 模型列表拉取结果。 */
+export type ModelListResult = { ok: true; models: string[] } | { ok: false; error: string }
+
+/** 模型分组:用于下拉面板按网关前缀归类展示。 */
+export interface ModelGroup {
+  label: string
+  models: string[]
+}
+
+/**
+ * 把模型 id 列表按常见网关前缀分组,便于浏览。
+ *
+ * 归属规则(纯字符串前缀,不猜语义):
+ *   - `cn:` → 国内
+ *   - `global:` → 国际
+ *   - 其余 → 其他(按字母序)
+ * 组内各按字母序排,稳定、可测。
+ */
+export function groupModels(models: readonly string[]): ModelGroup[] {
+  const buckets: Record<string, string[]> = { cn: [], global: [], other: [] }
+  for (const id of models) {
+    const key = id.startsWith('cn:') ? 'cn' : id.startsWith('global:') ? 'global' : 'other'
+    buckets[key]!.push(id)
+  }
+  const groups: ModelGroup[] = []
+  if (buckets.cn!.length)
+    groups.push({ label: '国内 (cn:)', models: [...buckets.cn!].sort() })
+  if (buckets.global!.length)
+    groups.push({ label: '国际 (global:)', models: [...buckets.global!].sort() })
+  if (buckets.other!.length)
+    groups.push({ label: '其他', models: [...buckets.other!].sort() })
+  return groups
+}
+
+/**
+ * 从网关拉取可用模型列表(OpenAI 兼容 GET /models)。
+ *
+ * 用途:设置页「获取模型列表」—— 让用户从网关真实返回的 id 里选,
+ * 而不是手抄(尤其自定义网关的模型 id 可能是长名,手输易错)。
+ * 请求头与 `buildRequest` 同规则:Anthropic 形态用 x-api-key,其余 Bearer。
+ */
+export async function listModels(
+  config: Pick<AIConfig, 'provider' | 'baseUrl' | 'apiKey'>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ModelListResult> {
+  if (!config.apiKey.trim()) return { ok: false, error: '未配置 API Key' }
+  const base = effectiveBaseUrl(config)
+  if (!base) return { ok: false, error: '未配置接口地址' }
+
+  const headers: Record<string, string> = {}
+  if (isAnthropicLike(config)) {
+    headers['x-api-key'] = config.apiKey
+    headers['anthropic-version'] = '2023-06-01'
+  } else {
+    headers.Authorization = `Bearer ${config.apiKey}`
+  }
+
+  try {
+    const res = await fetchImpl(`${base}/models`, { method: 'GET', headers })
+    if (!res.ok) {
+      const detail = await safeText(res)
+      return {
+        ok: false,
+        error: `HTTP ${res.status}${detail ? ` · ${detail.slice(0, 120)}` : ''}`,
+      }
+    }
+    const payload = await res.json()
+    const items = Array.isArray(payload?.data) ? payload.data : null
+    if (!items) return { ok: false, error: '响应缺少 data 数组(非 /models 模型列表)' }
+
+    const models = items
+      .map((m: any) => (typeof m?.id === 'string' ? m.id.trim() : ''))
+      .filter(Boolean)
+    if (!models.length) return { ok: false, error: '模型列表为空' }
+    return { ok: true, models }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: `请求失败:${msg}` }
+  }
+}
+
 /**
  * 调用 AI 归纳。
  * 永不抛异常 —— 失败返回 `{ ok:false, error }`,由 UI 决定是否提示。
+ *
+ * @param imageUrl 可选的图片 dataURL;传入后以多模态发给模型。
+ *                 只拍图不写字时,rawText 可留空(提示词自带图片识别指令)。
  */
 export async function summarizeKnowledge(
   rawText: string,
   config: AIConfig,
   fetchImpl: typeof fetch = fetch,
+  imageUrl = '',
 ): Promise<SummarizeResult> {
-  if (!rawText.trim()) return { ok: false, error: '原文为空' }
+  if (!rawText.trim() && !imageUrl) return { ok: false, error: '原文为空' }
   if (!config.enabled) return { ok: false, error: 'AI 未启用' }
   if (!config.apiKey.trim()) return { ok: false, error: '未配置 API Key' }
   if (!normalizeBaseUrl(config.baseUrl)) return { ok: false, error: '未配置接口地址' }
   if (!config.model.trim()) return { ok: false, error: '未配置模型名' }
 
-  const plan = buildRequest(rawText, config)
+  const plan = buildRequest(rawText, config, imageUrl)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), config.timeoutMs)
 

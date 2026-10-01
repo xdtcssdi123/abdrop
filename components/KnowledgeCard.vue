@@ -12,6 +12,7 @@ import { ref, computed } from 'vue'
 import type { KnowledgeCard } from '~/types'
 import { describeDue, memoryStrength, syncStateLabel } from '~/lib/srs'
 import { paletteFor, paletteVars } from '~/lib/palette'
+import { renderMarkdown } from '~/lib/markdown'
 import { STACK } from '~/lib/motion'
 
 const props = withDefaults(
@@ -46,7 +47,13 @@ const style = computed(() => {
     transform: `translate3d(0, ${baseY}px, ${-d * STACK.depthStep}px) rotateZ(${rotate}deg) scale(${scale})`,
     opacity: 1 - d * STACK.opacityStep,
     zIndex: 10 - d,
-    boxShadow: `0 ${blur}px ${blur * 2}px -6px rgba(15, 23, 42, ${alpha})`,
+    /*
+     * 阴影分两层:近处细接触影(实体感)+ 远处大扩散影(悬浮感)。
+     * 全部静态绘制,不参与逐帧合成;数值随深度递增,保持堆叠层次。
+     */
+    boxShadow: `
+      0 1px 1px rgba(15, 23, 42, ${Math.min(alpha * 0.55, 0.14)}),
+      0 ${blur * 1.1}px ${blur * 2.6}px -8px rgba(15, 23, 42, ${alpha + 0.05})`,
     // 卡片配色由合集决定:同一合集永远同一色,形成位置记忆
     ...paletteVars(paletteFor(props.card.collectionId, props.paletteIndex)),
   }
@@ -64,7 +71,7 @@ const backIsLong = computed(() => props.card.back.length > 120)
 </script>
 
 <template>
-  <article class="card gpu" :style="style" :data-depth="depth">
+  <article class="card gpu" :style="style" :data-depth="depth" :class="{ 'card--deep': depth > 0 }">
     <!-- 顶部:记忆强度细条 + 到期/状态角标 -->
     <header class="card__top">
       <div class="meter" :aria-label="`记忆等级 ${card.level}`">
@@ -80,15 +87,21 @@ const backIsLong = computed(() => props.card.back.length > 120)
       <span class="card__due">{{ dueText }}</span>
     </header>
 
-    <!-- 正面 -->
-    <div class="card__content">
+    <!-- 正面/答案区:翻面后整体可滚动(答案/图片超高时可滚看全) -->
+    <div class="card__content" :class="{ 'card__content--revealed card__scroll': showBack }">
       <p v-if="!card.front && !card.back" class="card__empty">空卡片</p>
-      <p v-else class="card__front">{{ card.front || card.back }}</p>
+      <!-- 正面:优先纯文本;无正面时退回 Markdown 渲染背面首部 -->
+      <p v-else-if="card.front" class="card__front">{{ card.front }}</p>
+      <div v-else class="card__front md-body" v-html="renderMarkdown(card.back)" />
 
-      <!-- 背面:仅顶层且翻面后显示 -->
+      <!-- 背面:仅顶层且翻面后显示(Markdown 渲染) -->
       <template v-if="showBack && card.front">
         <div class="card__divider" />
-        <p class="card__back" :class="{ 'card__back--long': backIsLong }">{{ card.back }}</p>
+        <div
+          class="card__back md-body"
+          :class="{ 'card__back--long': backIsLong }"
+          v-html="renderMarkdown(card.back)"
+        />
       </template>
 
       <!-- 未翻面时的提示 -->
@@ -133,6 +146,8 @@ const backIsLong = computed(() => props.card.back.length > 120)
     linear-gradient(150deg, var(--card-tint-a, rgba(255, 255, 255, 0.94)) 0%,
       var(--card-tint-b, rgba(255, 255, 255, 0.86)) 100%);
   border: 1px solid rgba(255, 255, 255, 0.92);
+  /* 内高光:一圈极淡的白边,让卡片边缘"立"起来 */
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.65);
   /* 左侧一根强调色细线:颜色识别的主要锚点 */
   border-left: 3px solid var(--card-accent, rgba(27, 36, 48, 0.15));
   transform-origin: center 88%;
@@ -150,7 +165,8 @@ const backIsLong = computed(() => props.card.back.length > 120)
   height: 70%;
   border-radius: 50%;
   background: var(--card-accent, transparent);
-  opacity: 0.07;
+  opacity: 0.1;
+  filter: blur(0.01px); /* 触发 GPU 层,避免色晕边缘锯齿 */
   pointer-events: none;
 }
 
@@ -166,9 +182,9 @@ const backIsLong = computed(() => props.card.back.length > 120)
   right: 40%;
   height: 45%;
   border-radius: var(--radius-card) 0 60% 0;
-  background: linear-gradient(140deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0));
   pointer-events: none;
-  opacity: 0.75;
+  opacity: 0.8;
 }
 
 .card__top {
@@ -216,6 +232,48 @@ const backIsLong = computed(() => props.card.back.length > 120)
   z-index: 1;
 }
 
+/*
+ * 翻面后的内容区:整体可滚动。
+ * 问题(正面)缩小置顶,答案与图片从上到下自然排布;
+ * 内容超高时滚动查看,而不是 overflow:hidden 把底部裁掉。
+ */
+.card__content--revealed {
+  justify-content: flex-start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 触控交给浏览器原生滚动;横向滑卡不冲突(.stack pan-y 已让出纵向) */
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(27, 36, 48, 0.18) transparent;
+}
+
+/* 翻面后:问题不再占主导,收缩为答案的引导行 */
+.card__content--revealed .card__front {
+  font-size: 17px;
+  line-height: 1.48;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.card__content--revealed .card__divider {
+  flex: 0 0 auto;
+}
+
+/* 答案不再自限 60% 高:由外层整体滚动接管,长答案可读全文 */
+.card__content--revealed .card__back {
+  max-height: none;
+  overflow: visible;
+  flex: 0 0 auto;
+}
+
+/* 图片在滚动流中自然占位,不再被裁 */
+.card__content--revealed .card__image {
+  flex: 0 0 auto;
+  max-height: 42%;
+}
+
 /* 正面:卡片的主体。卡片变小后,28px 在视觉上比原来的 30px 更醒目 */
 .card__front {
   margin: 0;
@@ -243,7 +301,6 @@ const backIsLong = computed(() => props.card.back.length > 120)
   font-size: 19px;
   line-height: 1.62;
   color: var(--ink-1);
-  white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
   max-height: 60%;
@@ -282,6 +339,33 @@ const backIsLong = computed(() => props.card.back.length > 120)
   align-items: center;
   position: relative;
   z-index: 1;
+}
+
+/*
+ * 深层卡片(第二张及以下)的内容淡化。
+ *
+ * 为什么只淡化内容而不是整卡:整卡 opacity 已经按深度递减(0.88/0.76),
+ * 但深色文字依然能透过顶层卡片的半透明背景显出来,造成字与字重叠。
+ * 这里把「文字/标签/图片」独立压暗 —— 卡片可见的浅色边缘还在,堆叠
+ * 层次不丢,但第二张卡的字不会干扰第一张。
+ *
+ * 过渡时长与 CardStack 补位动画(DURATION.refill = 420ms)一致:
+ * 当第二张卡补位成第一张时,.card--deep 被移除,文字在补位动画期间
+ * 同步恢复全不透明,不会出现"字先亮、卡后到"的错位。
+ */
+.card--deep {
+  --deep-content-alpha: 0.42;
+}
+
+.card__top,
+.card__front,
+.card__back,
+.card__peek,
+.card__empty,
+.card__bottom,
+.card__image {
+  opacity: var(--deep-content-alpha, 1);
+  transition: opacity 420ms cubic-bezier(0.16, 0.84, 0.22, 1);
 }
 
 .chip {

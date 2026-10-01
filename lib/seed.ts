@@ -12,7 +12,7 @@
 import type { CardRepository } from '~/lib/db'
 import { createCard } from '~/lib/db'
 import { hash32 } from '~/lib/anki-map'
-import { DAY_MS, intervalDaysForLevel, stateForLevel, DEFAULT_EASE } from '~/lib/srs'
+import { DAY_MS, intervalDaysForLevel, intervalMsForLevel, stateForLevel, DEFAULT_EASE } from '~/lib/srs'
 import type { ImportReport, KnowledgeCard, MemoryLevel } from '~/types'
 
 /** 种子卡片的声明式描述。 */
@@ -340,11 +340,13 @@ export function buildSeedCards(
     )
 
     const intervalDays = intervalDaysForLevel(spec.level)
+    const intervalMs = intervalMsForLevel(spec.level)
     const nextReviewAt = now + spec.dueOffsetDays * DAY_MS
-    // 已复习过的卡,把上次复习时间设成"下次到期往前一个间隔",保持自洽
+    // 已复习过的卡,把上次复习时间设成"下次到期往前一个间隔",保持自洽。
+    // 不足一天(分钟/小时档)也按真实毫秒间隔回推,避免 lastReviewedAt 越过 nextReviewAt。
     const lastReviewedAt =
-      spec.reviewCount > 0 && intervalDays > 0
-        ? nextReviewAt - intervalDays * DAY_MS
+      spec.reviewCount > 0 && intervalMs > 0
+        ? nextReviewAt - intervalMs
         : spec.reviewCount > 0
           ? now - DAY_MS
           : 0

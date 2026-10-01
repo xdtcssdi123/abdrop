@@ -146,7 +146,8 @@ describe('noteToCard 映射', () => {
     expect(card.intervalDays).toBe(4)
     expect(card.ease).toBe(2600)
     expect(card.lapses).toBe(3)
-    expect(card.level).toBe(3)
+    // 4 天 → 新表的天级档:6 天档(等级 6)
+    expect(card.level).toBe(6)
   })
 
   it('ease 非法时回落默认值', () => {

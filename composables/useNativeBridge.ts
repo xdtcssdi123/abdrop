@@ -1,5 +1,5 @@
 /**
- * 原生能力桥接:Camera / Haptics / Filesystem。
+ * 原生能力桥接:Camera / Haptics / Filesystem / HTTP。
  *
  * 关键约束:Web 端与测试环境必须完全可用 —— 所有原生调用都做能力探测,
  * 缺失时优雅降级(拍照降级为 <input type="file">,震动降级为 no-op)。
@@ -10,6 +10,114 @@ export function isNativePlatform(): boolean {
   if (typeof window === 'undefined') return false
   const cap = (window as any).Capacitor
   return Boolean(cap?.isNativePlatform?.())
+}
+
+/** 状态栏持久化键(设置页开关)。 */
+export const FULLSCREEN_KEY = 'abdrop.fullscreen'
+
+/** 读取全屏沉浸(隐藏状态栏)偏好。 */
+export async function getFullscreenPreference(): Promise<boolean> {
+  try {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem(FULLSCREEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** 保存全屏沉浸偏好。 */
+export async function setFullscreenPreference(on: boolean): Promise<void> {
+  try {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(FULLSCREEN_KEY, on ? '1' : '0')
+  } catch {
+    /* 隐私模式忽略 */
+  }
+}
+
+/**
+ * 应用全屏沉浸:原生容器内切换系统状态栏显隐。
+ * Web/测试环境降级:仅通过 CSS 变量标记,不影响功能。
+ * @returns 是否成功应用(Capacitor StatusBar 可用时 true)
+ */
+export async function applyFullscreen(on: boolean): Promise<boolean> {
+  if (!isNativePlatform()) {
+    // Web 预览:仍写入标记,页面按沉浸布局(无状态栏可藏)
+    document.documentElement.classList.toggle('fullscreen', on)
+    return false
+  }
+  try {
+    const { StatusBar } = await import('@capacitor/status-bar')
+    if (on) {
+      await StatusBar.hide()
+      // 沉浸模式:内容延伸到状态栏区域
+      await StatusBar.setOverlaysWebView({ overlay: true })
+    } else {
+      await StatusBar.setOverlaysWebView({ overlay: false })
+      await StatusBar.show()
+    }
+    return true
+  } catch {
+    // 插件缺失不阻塞
+    return false
+  }
+}
+
+/**
+ * 跨环境 fetch:原生走 CapacitorHttp,Web 走普通 fetch。
+ *
+ * 为什么需要:WebView 里的 `fetch` 受 CORS 限制 —— 用户自定义网关
+ * (尤其局域网 http 网关,如 192.168.x.x)往往不返回 CORS 头,WebView
+ * 直接拦截响应,表现为"测试不通 / 获取不到模型列表"。原生 HTTP 通道
+ * 走系统网络栈,没有 CORS,自建网关即可直连。
+ *
+ * 生命周期与签名对齐标准 fetch:返回 Response,支持 AbortSignal 取消,
+ * 上层代码(testAIConnection / listModels / summarizeKnowledge)无需区分环境。
+ */
+export async function platformFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  if (!isNativePlatform()) return fetch(input, init)
+
+  const { CapacitorHttp } = await import('@capacitor/core')
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const headers = init?.headers as Record<string, string> | undefined
+  // CapacitorHttp 收对象而非 JSON 字符串
+  const body = init?.body ? JSON.parse(String(init.body)) : undefined
+
+  const run = () =>
+    CapacitorHttp.request({
+      url,
+      method: method as any,
+      headers: headers ?? {},
+      data: body,
+      // 与 lib/ai.ts 默认超时一致,避免长请求无限挂起
+      connectTimeout: 20_000,
+      readTimeout: 120_000,
+    })
+
+  return new Promise((resolve, reject) => {
+    if (init?.signal?.aborted) {
+      reject(new DOMException('The operation was aborted.', 'AbortError'))
+      return
+    }
+    const onAbort = () => reject(new DOMException('The operation was aborted.', 'AbortError'))
+    init?.signal?.addEventListener('abort', onAbort, { once: true })
+    run()
+      .then((res) => {
+        const data = typeof res.data === 'string' ? res.data : JSON.stringify(res.data ?? '')
+        resolve(
+          new Response(data, {
+            status: res.status,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+      })
+      .catch(reject)
+      .finally(() => init?.signal?.removeEventListener('abort', onAbort))
+  })
 }
 
 /** 轻震动反馈:滑动吸合 / 双击唤起时调用。 */

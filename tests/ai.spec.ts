@@ -10,9 +10,12 @@ import {
   effectiveBaseUrl,
   extractJSONString,
   firstLine,
+  groupModels,
   isAnthropicLike,
+  listModels,
   normalizeBaseUrl,
   parseAIResponse,
+  parseDataUrl,
   summarizeKnowledge,
   testAIConnection,
 } from '~/lib/ai'
@@ -108,6 +111,45 @@ describe('请求构造', () => {
   it('normalizeBaseUrl 处理空值与空白', () => {
     expect(normalizeBaseUrl('  https://a.com/  ')).toBe('https://a.com')
     expect(normalizeBaseUrl('')).toBe('')
+  })
+
+  it('传入图片时 OpenAI 形态 user content 变多模态数组', () => {
+    const dataUrl = 'data:image/jpeg;base64,/9j/AAA'
+    const plan = buildRequest('请看图', config(), dataUrl)
+    const body = JSON.parse(plan.body)
+    const user = body.messages[1]
+    expect(Array.isArray(user.content)).toBe(true)
+    expect(user.content[0]).toEqual({ type: 'text', text: '请看图' })
+    expect(user.content[1]).toEqual({ type: 'image_url', image_url: { url: dataUrl } })
+  })
+
+  it('只传图片不传文字时,提示词自带读图指令', () => {
+    const plan = buildRequest('', config(), 'data:image/png;base64,xyz')
+    const body = JSON.parse(plan.body)
+    const user = body.messages[1]
+    expect(Array.isArray(user.content)).toBe(true)
+    expect(user.content[0].text).toContain('识别图片')
+  })
+
+  it('Anthropic 形态带图用 image source 结构', () => {
+    const dataUrl = 'data:image/png;base64,QUJD'
+    const plan = buildRequest('', config({ provider: 'anthropic', baseUrl: '' }), dataUrl)
+    const body = JSON.parse(plan.body)
+    const content = body.messages[0].content
+    expect(Array.isArray(content)).toBe(true)
+    expect(content[1]).toEqual({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'QUJD' },
+    })
+  })
+
+  it('parseDataUrl 解析 mime 与 base64', () => {
+    expect(parseDataUrl('data:image/jpeg;base64,AAAA')).toEqual({
+      mime: 'image/jpeg',
+      base64: 'AAAA',
+    })
+    // 非 dataURL 兜底:当作裸 base64
+    expect(parseDataUrl('RAW')).toEqual({ mime: 'image/jpeg', base64: 'RAW' })
   })
 })
 
@@ -277,5 +319,104 @@ describe('testAIConnection', () => {
     const res = await testAIConnection(config({ apiKey: '' }), fakeFetch({}))
     expect(res.ok).toBe(false)
     expect(res.message).toContain('API Key')
+  })
+})
+
+describe('listModels —— 获取模型列表', () => {
+  it('解析 OpenAI 形态 data[].id', async () => {
+    const fetchImpl = vi.fn(async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: 'cn:auto' }, { id: 'cn:deepseek-v4-flash' }] }),
+        text: async () => '',
+      }) as unknown as Response,
+    ) as unknown as typeof fetch
+
+    const res = await listModels(
+      config({ provider: 'custom', baseUrl: 'http://192.168.31.217:7864/v1' }),
+      fetchImpl,
+    )
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.models).toEqual(['cn:auto', 'cn:deepseek-v4-flash'])
+    }
+  })
+
+  it('请求打到 baseUrl/models 并带 Bearer', async () => {
+    const fetchImpl = vi.fn(async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: 'm1' }] }),
+        text: async () => '',
+      }) as unknown as Response,
+    ) as unknown as typeof fetch
+
+    await listModels(config({ baseUrl: 'https://gw.example.com/v1' }), fetchImpl)
+    const [url, init] = (fetchImpl as any).mock.calls[0]
+    expect(url).toBe('https://gw.example.com/v1/models')
+    expect(init.headers.Authorization).toBe('Bearer sk-test')
+  })
+
+  it('HTTP 错误时带出状态码', async () => {
+    const fetchImpl = vi.fn(async () =>
+      ({
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+        text: async () => 'Not Found',
+      }) as unknown as Response,
+    ) as unknown as typeof fetch
+
+    const res = await listModels(config(), fetchImpl)
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toContain('404')
+  })
+
+  it('响应缺少 data 数组时给出明确错误', async () => {
+    const fetchImpl = vi.fn(async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () => ({ foo: 'bar' }),
+        text: async () => '',
+      }) as unknown as Response,
+    ) as unknown as typeof fetch
+
+    const res = await listModels(config(), fetchImpl)
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toContain('data')
+  })
+
+  it('缺 key 或缺地址时直接拦截,不发请求', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch
+    const noKey = await listModels(config({ apiKey: '' }), fetchImpl)
+    expect(noKey.ok).toBe(false)
+    // custom 无官方默认地址,空 baseUrl 回落为空 → 拦截在发起请求前
+    const noUrl = await listModels(config({ provider: 'custom', baseUrl: '' }), fetchImpl)
+    expect(noUrl.ok).toBe(false)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+})
+
+describe('groupModels —— 模型分组', () => {
+  it('按 cn:/global:/其他 分成三组,组内按字母序', () => {
+    const groups = groupModels([
+      'cn:deepseek-v4-flash',
+      'global:gpt-5.3-codex',
+      'cn:auto',
+      'plain-model',
+      'global:kimi-k3',
+    ])
+    expect(groups.map((g) => g.label)).toEqual(['国内 (cn:)', '国际 (global:)', '其他'])
+    expect(groups[0]!.models).toEqual(['cn:auto', 'cn:deepseek-v4-flash'])
+    expect(groups[1]!.models).toEqual(['global:gpt-5.3-codex', 'global:kimi-k3'])
+    expect(groups[2]!.models).toEqual(['plain-model'])
+  })
+
+  it('空列表或全空组不产生空分组', () => {
+    expect(groupModels([])).toEqual([])
+    expect(groupModels(['cn:a'])).toEqual([{ label: '国内 (cn:)', models: ['cn:a'] }])
   })
 })

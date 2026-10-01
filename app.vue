@@ -18,7 +18,11 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { startViewportTracking } from '~/composables/useViewport'
 import { registerServiceWorker } from '~/composables/useServiceWorker'
-import { isNativePlatform } from '~/composables/useNativeBridge'
+import {
+  isNativePlatform,
+  applyFullscreen,
+  getFullscreenPreference,
+} from '~/composables/useNativeBridge'
 import { useCardRepository } from '~/lib/db'
 import { useCollections } from '~/composables/useAppState'
 import { importApkgFromUri } from '~/composables/useApkgOpen'
@@ -62,6 +66,9 @@ onMounted(() => {
     unregisterSW = fn
   })
 
+  // 冷启动即应用「全屏沉浸」偏好(隐藏状态栏),避免每次进 App 都要重设
+  void getFullscreenPreference().then((on) => applyFullscreen(on))
+
   if (!isNativePlatform()) return
   // 运行中收到「打开文件」意图 → appUrlOpen(冷启动由首页用 getLaunchUrl 兜底)。
   // 能进到这里的意图已被 Manifest 的 intent-filter 过滤(仅 .apkg 类文件),
@@ -72,10 +79,16 @@ onMounted(() => {
         void handleOpenUri(e.url)
       })
 
-      // Android 返回键:首页两次退出(第一次提示);其他页面回退上一页。
+      // Android 返回键:全屏答案层打开时先关答案层;
+      // 否则首页两次退出(第一次提示);其他页面回退上一页。
       // 用 location.pathname 判断当前页(在根组件里 useRoute 可能取不到正确路由,
       // 会导致误判成"回退上一页"而首页无历史 → 完全没反应)。
       backListener = await App.addListener('backButton', (e) => {
+        // 全屏答案层打开时,返回键只负责关答案层,不走页面回退/退出逻辑
+        if (typeof document !== 'undefined' && document.querySelector('.answer')) {
+          window.dispatchEvent(new Event('abdrop:close-answer'))
+          return
+        }
         const path = window.location.pathname || '/'
         const action = decideBack(path, lastBackAt, Date.now())
         if (action === 'navigate-back') {

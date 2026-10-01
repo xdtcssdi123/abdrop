@@ -152,6 +152,218 @@ describe('首页页面集成', () => {
     expect(w.findAll('.stack__slot')).toHaveLength(3)
   })
 
+  it('单击卡片打开全屏答案层,关闭后回到卡片堆叠', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: '什么是极限', back: '描述趋近过程' })
+    const w = await mountHome()
+
+    // 单击顶卡 → 全屏答案层出现,展示背面(单击有 280ms 双击窗口,需等待)
+    await w.find('.stack').trigger('touchstart', {
+      touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await new Promise((r) => setTimeout(r, 320))
+    await settle(2)
+
+    const overlay = w.find('.answer')
+    expect(overlay.exists()).toBe(true)
+    expect(overlay.text()).toContain('描述趋近过程')
+
+    // 关闭 → 回到卡片堆叠
+    await overlay.find('.answer__close').trigger('click')
+    await settle()
+    expect(w.find('.answer').exists()).toBe(false)
+  })
+
+  it('Android 返回键事件关闭全屏答案层(不再误判退出)', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: 'Q', back: 'A' })
+    const w = await mountHome()
+
+    // 打开全屏答案
+    await w.find('.stack').trigger('touchstart', {
+      touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await new Promise((r) => setTimeout(r, 320))
+    await settle(2)
+    expect(w.find('.answer').exists()).toBe(true)
+
+    // 模拟 app.vue 返回键处理:探测到 .answer 后派发关闭事件
+    window.dispatchEvent(new Event('abdrop:close-answer'))
+    await settle()
+
+    expect(w.find('.answer').exists()).toBe(false)
+  })
+
+  it('桌面 Esc 关闭全屏答案层', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: 'Q', back: 'A' })
+    const w = await mountHome()
+
+    await w.find('.stack').trigger('touchstart', {
+      touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await new Promise((r) => setTimeout(r, 320))
+    await settle(2)
+    expect(w.find('.answer').exists()).toBe(true)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await settle()
+
+    expect(w.find('.answer').exists()).toBe(false)
+  })
+
+  it('轻点答案面板空白处关闭全屏答案层', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: 'Q', back: 'A' })
+    const w = await mountHome()
+
+    // 打开全屏答案
+    await w.find('.stack').trigger('touchstart', {
+      touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await new Promise((r) => setTimeout(r, 320))
+    await settle(2)
+    expect(w.find('.answer').exists()).toBe(true)
+
+    // 在答案面板上轻点:位移为 0、时间短 → 关闭
+    const panel = w.find('.answer__panel')
+    await panel.trigger('touchstart', {
+      touches: [{ clientX: 200, clientY: 500, identifier: 0 }],
+      changedTouches: [{ clientX: 200, clientY: 500, identifier: 0 }],
+      preventDefault: () => {}, stopPropagation: () => {},
+    } as any)
+    await panel.trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 200, clientY: 500, identifier: 0 }],
+      preventDefault: () => {}, stopPropagation: () => {},
+    } as any)
+    await settle()
+
+    expect(w.find('.answer').exists()).toBe(false)
+
+    // 关键回归:轻点关闭的事件不得冒泡成"又一次单击卡片"(否则 280ms 双击窗口后重开)
+    await new Promise((r) => setTimeout(r, 320))
+    await settle(2)
+    expect(w.find('.answer').exists()).toBe(false)
+  })
+
+  it('答案面板内长按/滚动不算轻点,不误关(位移超过阈值)', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: 'Q', back: 'A' })
+    const w = await mountHome()
+
+    await w.find('.stack').trigger('touchstart', {
+      touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await new Promise((r) => setTimeout(r, 320))
+    await settle(2)
+
+    // 明显位移(滚动/拖动):不触发轻点关闭
+    const panel = w.find('.answer__panel')
+    await panel.trigger('touchstart', {
+      touches: [{ clientX: 200, clientY: 500, identifier: 0 }],
+      changedTouches: [{ clientX: 200, clientY: 500, identifier: 0 }],
+      preventDefault: () => {}, stopPropagation: () => {},
+    } as any)
+    await panel.trigger('touchmove', {
+      touches: [{ clientX: 210, clientY: 420, identifier: 0 }],
+      changedTouches: [{ clientX: 210, clientY: 420, identifier: 0 }],
+      preventDefault: () => {}, stopPropagation: () => {},
+    } as any)
+    await panel.trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 210, clientY: 420, identifier: 0 }],
+      preventDefault: () => {}, stopPropagation: () => {},
+    } as any)
+    await settle()
+
+    expect(w.find('.answer').exists()).toBe(true)
+  })
+
+  it('全屏答案层右滑判定 pass,提交复习', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: '什么是导数', back: '变化率' })
+    const w = await mountHome()
+    expect(w.text()).toContain('什么是导数')
+
+    // 打开全屏答案
+    await w.find('.stack').trigger('touchstart', {
+      touches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await w.find('.stack').trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 195, clientY: 400, identifier: 0 }],
+      preventDefault: () => {},
+    } as any)
+    await new Promise((r) => setTimeout(r, 320))
+    await settle(2)
+
+    // 全屏层内大幅右滑(超过 1/3 视口宽)判定 pass
+    const panel = w.find('.answer__panel')
+    expect(panel.exists()).toBe(true)
+    await panel.trigger('touchstart', {
+      touches: [{ clientX: 50, clientY: 300, identifier: 0 }],
+      changedTouches: [{ clientX: 50, clientY: 300, identifier: 0 }],
+      preventDefault: () => {}, stopPropagation: () => {},
+    } as any)
+    await panel.trigger('touchmove', {
+      touches: [{ clientX: 700, clientY: 301, identifier: 0 }],
+      changedTouches: [{ clientX: 700, clientY: 301, identifier: 0 }],
+      preventDefault: () => {}, stopPropagation: () => {},
+    } as any)
+    await panel.trigger('touchend', {
+      touches: [],
+      changedTouches: [{ clientX: 700, clientY: 301, identifier: 0 }],
+      preventDefault: () => {}, stopPropagation: () => {},
+    } as any)
+    // 滑出动画 + 超时兜底最多约 380ms,sleep 真等动画完成再断言
+    await new Promise((r) => setTimeout(r, 450))
+    await settle(2)
+
+    // 全屏关闭且复习已提交(卡池引用变化)
+    expect(w.find('.answer').exists()).toBe(false)
+    const emitted = w.findComponent({ name: 'CardStack' }).emitted('review')
+    expect(emitted).toBeTruthy()
+    expect((emitted![0] as any)[0]).toBe('pass')
+  })
+
   it('录入框默认关闭,收到 compose 事件后才打开', async () => {
     const w = await mountHome()
     expect(w.find('.compose').exists()).toBe(false)
@@ -199,13 +411,13 @@ describe('首页页面集成', () => {
     // 已从首页移出
     expect(w.text()).toContain('暂无待复习卡片')
 
-    // 落库为等级 1、约 1 天后复习
+    // 落库为等级 1、约 20 分钟后复习(经典艾宾浩斯第 1 档)
     const stored = await repo.getCard(card.id)
     expect(stored?.level).toBe(1)
     expect(stored?.passCount).toBe(1)
-    const days = (stored!.nextReviewAt - Date.now()) / 86400000
-    expect(days).toBeGreaterThan(0.9)
-    expect(days).toBeLessThan(1.1)
+    const mins = (stored!.nextReviewAt - Date.now()) / 60000
+    expect(mins).toBeGreaterThan(15)
+    expect(mins).toBeLessThan(25)
   })
 
   it('左滑复习:卡片转为待复习,等级回到 1', async () => {
@@ -370,26 +582,58 @@ describe('首页页面集成', () => {
     expect(w.text()).toContain('已掌握')
   })
 
-  it('未开启打卡提醒时首页不显示打卡胶囊', async () => {
+  it('未开启打卡提醒时首页不显示打卡状态标签', async () => {
     const w = await mountHome()
     expect(w.find('.checkin').exists()).toBe(false)
   })
 
-  it('开启打卡提醒后首页显示打卡胶囊,点击完成今日打卡', async () => {
+  it('开启打卡提醒时首页显示只读打卡状态标签(不可点击)', async () => {
     window.localStorage.setItem(
       'abdrop.checkin.config',
       JSON.stringify({ enabled: true, startMinute: 9 * 60, endMinute: 22 * 60 }),
     )
     const w = await mountHome()
-    const pill = w.find('.checkin')
-    expect(pill.exists()).toBe(true)
+    const label = w.find('.checkin')
+    // 标签可见,显示未打卡状态
+    expect(label.exists()).toBe(true)
+    expect(w.text()).toContain('今日未打卡')
+    // 是只读标签(span),不是按钮 —— 不能点击
+    expect(label.element.tagName).not.toBe('BUTTON')
+    // 点击也无效:状态不因点击而改变
+    await label.trigger('click')
+    await settle()
+    expect(window.localStorage.getItem('abdrop.checkin.date')).toBeNull()
+  })
+
+  it('刷完全部卡片后自动完成今日打卡,标签同步为已打卡', async () => {
+    window.localStorage.setItem(
+      'abdrop.checkin.config',
+      JSON.stringify({ enabled: true, startMinute: 9 * 60, endMinute: 22 * 60 }),
+    )
+    const repo = useCardRepository()
+    await repo.addCard({ front: 'Q', back: 'A' })
+    const w = await mountHome()
     expect(w.text()).toContain('今日未打卡')
 
-    await pill.trigger('click')
+    // 刷掉唯一一张卡
+    await w.findComponent({ name: 'CardStack' }).vm.$emit('review', 'pass')
     await settle()
 
-    expect(w.find('.checkin').text()).toContain('今日已打卡')
+    // 全部刷完 → 自动打卡:日期已写库、提示已弹出、标签变已打卡
     expect(window.localStorage.getItem('abdrop.checkin.date')).toBeTruthy()
+    expect(w.text()).toContain('已自动打卡')
+    expect(w.find('.checkin--done').text()).toContain('今日已打卡')
+  })
+
+  it('未开启打卡时刷完卡片不自动打卡', async () => {
+    const repo = useCardRepository()
+    await repo.addCard({ front: 'Q', back: 'A' })
+    const w = await mountHome()
+
+    await w.findComponent({ name: 'CardStack' }).vm.$emit('review', 'pass')
+    await settle()
+
+    expect(window.localStorage.getItem('abdrop.checkin.date')).toBeNull()
   })
 })
 
@@ -515,6 +759,26 @@ describe('管理员页面集成', () => {
     expect(stored!.reviewCount).toBe(0)
     // 内容仍在
     expect(stored!.front).toBe('A')
+  })
+
+  it('「完全重新开始」同时重置今日打卡状态', async () => {
+    const repo = useCardRepository()
+    await addScheduledCard(repo, 'A', 'inbox')
+    // 模拟今天已打过卡
+    window.localStorage.setItem('abdrop.checkin.date', '2026-09-30')
+
+    const w = await mountAdmin()
+    await w.findAll('.mode__radio')[1]!.setValue()
+    await settle()
+    await w.find('.action').trigger('click')
+    await settle()
+    await w.findAll('.confirm__actions .btn')[1]!.trigger('click')
+    await settle()
+
+    // 打卡日期被清空 → 回首页显示「今日未打卡」
+    expect(window.localStorage.getItem('abdrop.checkin.date')).toBe('')
+    // 提醒配置(用户偏好)不受影响
+    expect(window.localStorage.getItem('abdrop.checkin.config')).toBeNull()
   })
 
   it('破坏性操作在确认框里有明确警告', async () => {
@@ -685,13 +949,14 @@ describe('设置页页面集成', () => {
     expect(link.attributes('href')).toBe('/admin')
   })
 
-  it('只保留三项功能面板,无冗余入口', async () => {
+  it('只保留核心功能面板,无冗余入口', async () => {
     const w = await mountSettings()
     const heads = w.findAll('.panel__head').map((h) => h.text())
-    expect(heads).toHaveLength(3)
-    expect(heads[0]).toContain('AI 接口配置')
-    expect(heads[1]).toContain('合集管理')
-    expect(heads[2]).toContain('数据导入导出')
+    expect(heads).toHaveLength(4)
+    expect(heads[0]).toContain('全屏沉浸')
+    expect(heads[1]).toContain('AI 接口配置')
+    expect(heads[2]).toContain('合集管理')
+    expect(heads[3]).toContain('数据导入导出')
   })
 
   it('显示卡片总数', async () => {
@@ -724,7 +989,7 @@ describe('设置页页面集成', () => {
     await repo.createCollection('数学')
 
     const w = await mountSettings()
-    await w.findAll('.panel__head')[1]!.trigger('click')
+    await w.findAll('.panel__head')[2]!.trigger('click')
     await settle()
 
     expect(w.text()).toContain('未分类')
@@ -733,7 +998,7 @@ describe('设置页页面集成', () => {
 
   it('默认合集不提供删除按钮(不能删掉唯一的兜底合集)', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[1]!.trigger('click')
+    await w.findAll('.panel__head')[2]!.trigger('click')
     await settle()
 
     const items = w.findAll('.list__item')
@@ -744,7 +1009,7 @@ describe('设置页页面集成', () => {
 
   it('展开数据面板时提供 Anki 导入与导出入口', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[2]!.trigger('click')
+    await w.findAll('.panel__head')[3]!.trigger('click')
     await settle()
 
     expect(w.text()).toContain('导入 Anki 文件')
@@ -752,9 +1017,28 @@ describe('设置页页面集成', () => {
     expect(w.text()).toContain('保存配置(含卡片与复习进度)')
   })
 
-  it('AI 面板切换服务商时自动填充默认地址与模型', async () => {
+  it('全屏沉浸面板可展开,切换开关持久化偏好', async () => {
     const w = await mountSettings()
     await w.findAll('.panel__head')[0]!.trigger('click')
+    await settle()
+
+    expect(w.text()).toContain('隐藏系统状态栏')
+    const sw = w.find('.panel__body input[type="checkbox"]')
+    expect((sw.element as HTMLInputElement).checked).toBe(false)
+
+    await sw.setValue(true)
+    await settle()
+
+    expect(window.localStorage.getItem('abdrop.fullscreen')).toBe('1')
+    // 关闭
+    await sw.setValue(false)
+    await settle()
+    expect(window.localStorage.getItem('abdrop.fullscreen')).toBe('0')
+  })
+
+  it('AI 面板切换服务商时自动填充默认地址与模型', async () => {
+    const w = await mountSettings()
+    await w.findAll('.panel__head')[1]!.trigger('click')
     await settle()
 
     const chips = w.findAll('.chips .chip')
@@ -808,7 +1092,7 @@ describe('设置页页面集成', () => {
     const math = await repo.createCollection('数学')
     const w = await mountSettings()
 
-    await w.findAll('.panel__head')[1]!.trigger('click')
+    await w.findAll('.panel__head')[2]!.trigger('click')
     await settle()
 
     const opts = w.findAll('.scope-opt')

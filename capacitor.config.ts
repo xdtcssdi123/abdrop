@@ -14,10 +14,13 @@ const config: CapacitorConfig = {
   server: {
     androidScheme: 'https',
     iosScheme: 'capacitor',
+    // 允许连接 http 明文网关(局域网自建 LLM 服务常见);
+    // 与 AndroidManifest 的 usesCleartextTraffic 双保险
+    cleartext: true,
   },
 
   android: {
-    allowMixedContent: false,
+    allowMixedContent: true,
     backgroundColor: '#eef1f4',
     // 卡片滑动依赖高频触摸事件,禁止 WebView 过度滚动
     webContentsDebuggingEnabled: false,
@@ -30,6 +33,10 @@ const config: CapacitorConfig = {
   },
 
   plugins: {
+    // 原生 HTTP 通道:绕过 WebView CORS,让自定义网关可直连
+    CapacitorHttp: {
+      enabled: true,
+    },
     SplashScreen: {
       launchShowDuration: 0,
       backgroundColor: '#eef1f4',

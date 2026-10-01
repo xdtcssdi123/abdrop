@@ -15,6 +15,15 @@ import type { ReviewVerdict } from '~/types'
 /** 滑动判定阈值:屏幕宽度的 1/3。 */
 export const SWIPE_THRESHOLD_RATIO = 1 / 3
 
+/**
+ * 滑动阈值绝对上限(px)。
+ *
+ * 完全按「宽 1/3」算的话,横屏视口宽约 844px,阈值会涨到 280px,
+ * 用户要拖很远卡片才消失 —— 横竖屏手感不一致。
+ * 用 min() 封顶:竖屏(390×1/3≈130px)不受影响,横屏压到与竖屏接近。
+ */
+export const SWIPE_THRESHOLD_MAX_PX = 150
+
 /** 手势方向锁定的最小位移(px),低于此值不判定方向。 */
 export const DIRECTION_LOCK_PX = 10
 
@@ -29,9 +38,9 @@ export const TOP_EDGE_RATIO = 0.18
 export const COLLECTION_TRIGGER_PX = 48
 export const COLLECTION_FULL_PX = 132
 
-/** 判定滑动结果的阈值像素。 */
+/** 判定滑动结果的阈值像素(横屏封顶,保证横竖屏手感一致)。 */
 export function swipeThreshold(viewportWidth: number): number {
-  return viewportWidth * SWIPE_THRESHOLD_RATIO
+  return Math.min(viewportWidth * SWIPE_THRESHOLD_RATIO, SWIPE_THRESHOLD_MAX_PX)
 }
 
 /** 把横向位移映射为倾斜角(deg),用于 3D 跟手旋转。 */

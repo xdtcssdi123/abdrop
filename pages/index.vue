@@ -10,6 +10,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
  */
 import type { KnowledgeCard, ReviewVerdict } from '~/types'
 import { createReviewService } from '~/lib/review-service'
+import { describeDue } from '~/lib/srs'
 import { useCardRepository } from '~/lib/db'
 import { useCollections, useAIConfigState } from '~/composables/useAppState'
 import { useCheckinState } from '~/composables/useCheckinState'
@@ -83,9 +84,22 @@ async function onReview(verdict: ReviewVerdict) {
   pool.value = pool.value.slice(1)
   allDue.value = allDue.value.filter((c) => c.id !== card.id)
   const next = await service.commitReview(card, verdict, testNowMs())
+
+  // 全部卡片刷完 → 自动打卡(打卡已开启且今天还没打时)。
+  // 语义:当天复习完成即视为"今日已打卡",无需再手动点打卡按钮。
+  if (
+    pool.value.length === 0 &&
+    checkinConfig.value.enabled &&
+    !checkedInToday.value
+  ) {
+    await checkin.checkIn()
+    showToast('今日复习完成 · 已自动打卡')
+    return
+  }
+
   showToast(
     verdict === 'pass'
-      ? `已掌握 · 下次 ${Math.round((next.nextReviewAt - Date.now()) / 86400000)} 天后`
+      ? `已掌握 · 下次 ${describeDue(next, Date.now())}`
       : '转入待复习',
   )
 }
@@ -151,15 +165,6 @@ async function setupCheckinReminder() {
   void checkin.scheduleNotificationsIfNeeded()
 }
 
-async function onCheckinTap() {
-  if (checkin.checkedInToday.value) {
-    showToast('今天已经打过卡啦')
-    return
-  }
-  await checkin.checkIn()
-  showToast('今日打卡成功,明天见')
-}
-
 // ── 打开 .apkg 导入(手机文件管理器「用 ABDrop 打开」) ─────────
 async function handleLaunchApkg() {
   if (typeof window === 'undefined') return
@@ -206,18 +211,17 @@ onBeforeUnmount(() => {
       @compose="openCompose"
     />
 
-    <!-- 每日打卡胶囊:开启提醒后常驻右上角,未打卡每小时提醒 -->
+    <!-- 今日打卡状态标签(只读,不可点击):刷完全部卡片后自动打卡,这里反映当前状态 -->
     <Transition name="fade">
-      <button
+      <span
         v-if="checkinConfig.enabled"
         class="checkin"
         :class="{ 'checkin--done': checkedInToday }"
-        type="button"
-        @click="onCheckinTap"
+        aria-live="polite"
       >
         <span class="checkin__dot" />
-        {{ checkedInToday ? '今日已打卡' : '今日未打卡 · 点此打卡' }}
-      </button>
+        {{ checkedInToday ? '今日已打卡' : '今日未打卡' }}
+      </span>
     </Transition>
 
     <!-- 当前复习范围:仅在锁定到单个合集时显示;切换入口在设置页 -->
@@ -285,16 +289,25 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 16px;
+  padding: 9px 17px;
   border-radius: 999px;
   font-size: 14px;
   font-weight: 500;
   color: var(--ink-1);
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(14px) saturate(1.4);
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 1px 1px rgba(255, 255, 255, 0.7) inset,
+    0 8px 24px rgba(15, 23, 42, 0.1);
   white-space: nowrap;
   text-decoration: none;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 160ms ease;
+}
+
+.scope:active {
+  transform: translateX(-50%) scale(0.96);
 }
 
 .scope__dot {
@@ -310,7 +323,7 @@ onBeforeUnmount(() => {
   color: var(--ink-3);
 }
 
-/* 每日打卡胶囊:右上角常驻,未打卡时琥珀色提示,打卡后转绿色 */
+/* 今日打卡状态标签:只读,不能点击,仅反映「已打卡 / 未打卡」 */
 .checkin {
   position: absolute;
   top: calc(var(--safe-top) + 10px);
@@ -320,17 +333,23 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   max-width: calc(100vw - var(--safe-left) - var(--safe-right) - 140px);
-  padding: 8px 14px;
+  padding: 9px 15px;
   border-radius: 999px;
   font-size: 13.5px;
   font-weight: 600;
   color: var(--fail);
-  background: rgba(255, 251, 235, 0.9);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.12);
+  background: rgba(255, 251, 235, 0.88);
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  border: 1px solid rgba(232, 181, 60, 0.28);
+  box-shadow:
+    0 1px 1px rgba(255, 255, 255, 0.65) inset,
+    0 6px 18px rgba(15, 23, 42, 0.1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* 只读:不做点击反馈 */
+  pointer-events: none;
 }
 
 .checkin__dot {
@@ -344,7 +363,8 @@ onBeforeUnmount(() => {
 
 .checkin--done {
   color: var(--pass);
-  background: rgba(236, 253, 245, 0.9);
+  background: rgba(236, 253, 245, 0.88);
+  border-color: rgba(63, 191, 127, 0.3);
 }
 
 /* 极小齿轮:低对比、不抢视线,但可点区域仍够大 */
@@ -361,11 +381,12 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   color: var(--ink-3);
   opacity: 0.55;
-  transition: opacity 160ms ease;
+  transition: opacity 160ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .gear:active {
   opacity: 0.9;
+  transform: scale(0.92);
 }
 
 .toast {

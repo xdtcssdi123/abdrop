@@ -5,7 +5,7 @@
  * 所以核心判定逻辑(`computeViewport`)必须被测试锁住。
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { computeViewport, startViewportTracking } from '~/composables/useViewport'
+import { computeViewport, cardSizeForLandscape, startViewportTracking } from '~/composables/useViewport'
 
 describe('computeViewport —— 键盘判定', () => {
   it('无键盘时 inset 为 0', () => {
@@ -38,6 +38,29 @@ describe('computeViewport —— 键盘判定', () => {
   it('取整避免小数造成 CSS 亚像素抖动', () => {
     const r = computeViewport(800.6, 460.2)
     expect(Number.isInteger(r.keyboardInset)).toBe(true)
+  })
+})
+
+describe('cardSizeForLandscape —— 横屏卡片尺寸', () => {
+  it('竖屏不干预(交还 CSS 默认)', () => {
+    expect(cardSizeForLandscape(390, 844)).toBeNull()
+    expect(cardSizeForLandscape(800, 800)).toBeNull()
+  })
+
+  it('手机横屏:高度接近整屏、宽度按 60vw 并封顶 340', () => {
+    const s = cardSizeForLandscape(844, 390)
+    expect(s).toEqual({ width: Math.min(844 * 0.6, 340), height: 390 - 16 })
+  })
+
+  it('大屏横屏:高度封顶 460、宽度封顶 340', () => {
+    const s = cardSizeForLandscape(1920, 1080)
+    expect(s).toEqual({ width: 340, height: 460 })
+  })
+
+  it('极端矮视口也不产生负高度', () => {
+    const s = cardSizeForLandscape(640, 10)
+    expect(s).not.toBeNull()
+    expect(s!.height).toBe(0)
   })
 })
 
@@ -81,6 +104,8 @@ describe('startViewportTracking', () => {
     })
     vi.unstubAllGlobals()
     document.documentElement.style.removeProperty('--kb-inset')
+    document.documentElement.style.removeProperty('--card-h')
+    document.documentElement.style.removeProperty('--card-w')
     document.documentElement.classList.remove('kb-open')
   })
 

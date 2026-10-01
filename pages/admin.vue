@@ -22,10 +22,12 @@ import {
 import { SEED_COLLECTIONS, SEED_SPECS, countDemoData, seedDemoData, clearDemoData } from '~/lib/seed'
 import { getClockOffsetMs, setClockOffsetMs, testNow } from '~/lib/clock'
 import { useCollections } from '~/composables/useAppState'
+import { useCheckinState } from '~/composables/useCheckinState'
 import { hapticTap } from '~/composables/useNativeBridge'
 
 const repo = useCardRepository()
 const { collections, refresh: refreshCollections } = useCollections()
+const checkin = useCheckinState()
 
 /** 选中的重置范围 */
 const scopeId = ref<string>(ALL_COLLECTIONS_ID)
@@ -166,6 +168,11 @@ async function confirmPending() {
         Date.now(),
         target.label,
       )
+      // 「完全重新开始」:打卡进度一并清零 —— 重开后回到「今日未打卡」,
+      // 首页打卡胶囊随之回到初始状态(不重置提醒配置,那是用户偏好)。
+      if (target.mode === 'full') {
+        await checkin.resetCheckin()
+      }
       lastReport.value = describeReset(report)
       await loadPreview()
       await refreshCollections()
@@ -374,6 +381,9 @@ onBeforeUnmount(() => {
             <p v-if="RESET_MODE_INFO[pending.mode].destructive" class="confirm__danger">
               记忆等级、复习次数、遗忘次数都会被清空,且无法撤销。
               建议先到「设置 → 数据导入导出」备份。
+            </p>
+            <p v-if="pending.mode === 'full'" class="confirm__note">
+              今日打卡状态也会一并重置为「未打卡」。
             </p>
             <p v-else class="confirm__note">
               卡片会立刻到期,记忆等级与复习统计保持不变。

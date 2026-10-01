@@ -24,7 +24,7 @@ export default defineNuxtConfig({
             'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover',
         },
         // 移动端网页:让浏览器 UI 与页面底色一致,消除地址栏色差
-        { name: 'theme-color', content: '#eef1f4' },
+        { name: 'theme-color', content: '#eef2f6' },
         { name: 'color-scheme', content: 'light' },
         // 添加到主屏后以全屏 App 形态运行(不显示 Safari 地址栏)
         { name: 'mobile-web-app-capable', content: 'yes' },

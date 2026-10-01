@@ -9,6 +9,7 @@ import {
   DIRECTION_LOCK_PX,
   DOUBLE_TAP_MS,
   DOUBLE_TAP_SLOP_PX,
+  SWIPE_THRESHOLD_MAX_PX,
   SWIPE_THRESHOLD_RATIO,
   clamp,
   collectionProgress,
@@ -30,13 +31,20 @@ import {
 const VW = 390
 const VH = 844
 
-describe('滑动阈值 1/3 屏', () => {
+describe('滑动阈值 1/3 屏(横屏封顶)', () => {
   it('阈值常量为 1/3', () => {
     expect(SWIPE_THRESHOLD_RATIO).toBeCloseTo(1 / 3)
   })
 
   it('阈值随视口宽度换算', () => {
     expect(swipeThreshold(390)).toBeCloseTo(130)
+  })
+
+  it('横屏宽视口被绝对上限截断,避免要拖很远才生效', () => {
+    // 844×1/3≈281;封顶后与竖屏手感接近
+    expect(swipeThreshold(844)).toBe(SWIPE_THRESHOLD_MAX_PX)
+    expect(swipeThreshold(844)).toBeLessThan(300)
+    expect(SWIPE_THRESHOLD_MAX_PX).toBe(150)
   })
 
   it('刚好 1/3 屏即判定为提交(含边界)', () => {
@@ -63,6 +71,11 @@ describe('滑动阈值 1/3 屏', () => {
 
   it('宽度为 0 时不误判提交', () => {
     expect(shouldCommit(10, 0)).toBe(false)
+  })
+
+  it('横屏下 150px 即可提交(手感对齐竖屏)', () => {
+    expect(shouldCommit(150, 844)).toBe(true)
+    expect(shouldCommit(149, 844)).toBe(false)
   })
 })
 

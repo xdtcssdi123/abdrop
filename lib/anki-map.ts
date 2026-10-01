@@ -119,6 +119,7 @@ export function noteToCard(
     reviewCount: 0,
     passCount: 0,
     failCount: 0,
+    consecutiveFails: 0,
     imageUri,
     ankiNoteId: note.noteId,
     backEdited: false,

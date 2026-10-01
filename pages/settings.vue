@@ -6,7 +6,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
  * 首页不再放任何录入入口(双击已移除、合集栏按钮已移至本页),录入统一从设置页进。
  */
 import type { AIConfig, AIProvider, Collection } from '~/types'
-import { PROVIDER_PRESETS, testAIConnection } from '~/lib/ai'
+import { PROVIDER_PRESETS, groupModels, listModels, testAIConnection } from '~/lib/ai'
 import {
   ANKI_IMPORT_ACCEPT,
   exportForAnki,
@@ -14,7 +14,14 @@ import {
   importAnkiFile,
   importNativeBackup,
 } from '~/lib/anki-io'
-import { saveExportFile, hapticTap } from '~/composables/useNativeBridge'
+import {
+  saveExportFile,
+  hapticTap,
+  platformFetch,
+  applyFullscreen,
+  getFullscreenPreference,
+  setFullscreenPreference,
+} from '~/composables/useNativeBridge'
 import { useCardRepository } from '~/lib/db'
 import { createReviewService } from '~/lib/review-service'
 import { SEED_COLLECTIONS, SEED_SPECS, clearDemoData, seedDemoData } from '~/lib/seed'
@@ -43,6 +50,8 @@ const checkinStart = ref('09:00')
 const checkinEnd = ref('22:00')
 /** 打卡提醒卡片是否展开(独立折叠,默认收起,与其他面板互不影响) */
 const checkinOpen = ref(false)
+/** 全屏沉浸(隐藏状态栏)开关状态 */
+const fullscreenOn = ref(false)
 /** 一天内的分钟数 <-> HH:MM。 */
 function minutesToTime(m: number): string {
   const h = Math.floor(m / 60) % 24
@@ -77,7 +86,7 @@ async function onCheckinEndChange() {
 }
 
 /** 当前打开的折叠面板(none / ai / collections / data)。 */
-const panel = ref<'none' | 'ai' | 'collections' | 'data'>('none')
+const panel = ref<'none' | 'fullscreen' | 'ai' | 'collections' | 'data'>('none')
 const toast = ref('')
 const busy = ref('')
 const cardCount = ref(0)
@@ -101,7 +110,21 @@ onMounted(async () => {
   cardCount.value = await repo.countCards()
   await checkin.load()
   syncCheckinForm()
+  fullscreenOn.value = await getFullscreenPreference()
 })
+
+/** 切换全屏沉浸(隐藏状态栏):立即应用并持久化。 */
+async function onFullscreenToggle(e: Event) {
+  const on = (e.target as HTMLInputElement).checked
+  fullscreenOn.value = on
+  const applied = await applyFullscreen(on)
+  await setFullscreenPreference(on)
+  showToast(
+    on
+      ? (applied ? '已进入全屏沉浸' : '已开启(当前环境无原生状态栏)')
+      : '已退出全屏',
+  )
+}
 
 function toggle(next: 'ai' | 'collections' | 'data') {
   if (panel.value === next) {
@@ -142,7 +165,7 @@ async function onSaveAI() {
 async function onTestAI() {
   busy.value = 'ai'
   try {
-    const result = await testAIConnection({ ...aiDraft.value, enabled: true })
+    const result = await testAIConnection({ ...aiDraft.value, enabled: true }, platformFetch)
     aiDraft.value.lastTestOk = result.ok
     aiDraft.value.lastTestedAt = Date.now()
     aiDraft.value.lastTestMessage = result.message
@@ -150,6 +173,57 @@ async function onTestAI() {
     showToast(result.ok ? '连接正常' : `连接失败:${result.message}`)
   } finally {
     busy.value = ''
+  }
+}
+
+/** 从网关拉取到的可用模型 id 列表(供下拉选择)。 */
+const modelOptions = ref<string[]>([])
+/** 模型列表拉取状态:'' 空闲 / 'models' 拉取中。 */
+const modelBusy = ref(false)
+/** 模型选择面板是否展开。 */
+const modelPanelOpen = ref(false)
+/** 模型列表搜索关键字(按 id 模糊过滤)。 */
+const modelSearch = ref('')
+
+/** 按下拉面板的分组 + 搜索过滤后的模型。 */
+const groupedModels = computed(() => {
+  const q = modelSearch.value.trim().toLowerCase()
+  if (!modelOptions.value.length) return []
+  const filtered = q
+    ? modelOptions.value.filter((m) => m.toLowerCase().includes(q))
+    : [...modelOptions.value]
+  return groupModels(filtered)
+})
+
+/** 当前输入是否匹配列表里的某个 id(用于高亮)。 */
+function isModelSelected(m: string): boolean {
+  return aiDraft.value.model === m
+}
+
+/** 从面板选中一个模型。 */
+function pickModel(m: string) {
+  aiDraft.value.model = m
+  modelPanelOpen.value = false
+  modelSearch.value = ''
+}
+
+/** 从网关拉取模型列表,成功后填充到下拉。 */
+async function onFetchModels() {
+  if (modelBusy.value) return
+  modelBusy.value = true
+  try {
+    const result = await listModels({ ...aiDraft.value }, platformFetch)
+    if (result.ok) {
+      modelOptions.value = result.models
+      modelPanelOpen.value = true
+      modelSearch.value = ''
+      showToast(`已获取 ${result.models.length} 个模型`)
+    } else {
+      modelOptions.value = []
+      showToast(`获取失败:${result.error}`)
+    }
+  } finally {
+    modelBusy.value = false
   }
 }
 
@@ -405,6 +479,32 @@ async function onClearAll() {
           </p>
         </div>
       </section>
+
+      <!-- 全屏沉浸:隐藏系统状态栏 -->
+      <section class="panel">
+        <button class="panel__head" type="button" @click="panel === 'fullscreen' ? (panel = 'none') : (panel = 'fullscreen')">
+          <span class="panel__name">全屏沉浸</span>
+          <span class="panel__meta">{{ fullscreenOn ? '已开启' : '未开启' }}</span>
+          <svg class="panel__caret" :class="{ 'panel__caret--open': panel === 'fullscreen' }" viewBox="0 0 24 24" width="18" height="18">
+            <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+        <div v-if="panel === 'fullscreen'" class="panel__body">
+          <label class="row">
+            <span class="row__label">隐藏系统状态栏</span>
+            <input
+              class="switch"
+              type="checkbox"
+              :checked="fullscreenOn"
+              @change="onFullscreenToggle"
+            />
+          </label>
+          <p class="field__hint">
+            开启后隐藏手机顶部状态栏(时钟、电量等),卡片占据整个屏幕,浏览更沉浸。
+            原生容器内即时生效;网页预览无状态栏可隐藏。
+          </p>
+        </div>
+      </section>
       <!-- ① AI 接口配置 -->
       <section class="panel">
         <button class="panel__head" type="button" @click="toggle('ai')">
@@ -450,13 +550,94 @@ async function onClearAll() {
 
           <label class="field">
             <span class="field__label">模型</span>
-            <input v-model="aiDraft.model" class="input" type="text" placeholder="gpt-4o-mini" />
+
+            <!-- 面板展开时的全屏透明遮罩:点面板外任意处关闭 -->
+            <Transition name="fade">
+              <div
+                v-if="modelPanelOpen && modelOptions.length"
+                class="model-scrim"
+                @click="modelPanelOpen = false"
+              />
+            </Transition>
+
+            <div class="model-field">
+              <input
+                v-model="aiDraft.model"
+                class="input"
+                type="text"
+                placeholder="gpt-4o-mini"
+                @focus="modelSearch = ''; modelPanelOpen = modelOptions.length > 0"
+              />
+              <!-- 模型选择面板:可滚动 + 分组 + 搜索过滤 -->
+              <Transition name="fade">
+                <div v-if="modelPanelOpen && modelOptions.length" class="model-panel">
+                  <div class="model-panel__search">
+                    <input
+                      v-model="modelSearch"
+                      class="input model-panel__search-input"
+                      type="text"
+                      placeholder="搜索模型…"
+                      @click.stop
+                      @focus.stop
+                    />
+                  </div>
+                  <div class="model-panel__list scroll-area">
+                    <template v-if="groupedModels.length">
+                      <template v-for="g in groupedModels" :key="g.label">
+                        <div class="model-panel__group">{{ g.label }}</div>
+                        <button
+                          v-for="m in g.models"
+                          :key="m"
+                          class="model-panel__item"
+                          :class="{ 'model-panel__item--on': isModelSelected(m) }"
+                          type="button"
+                          @click="pickModel(m)"
+                        >
+                          <span class="model-panel__name">{{ m }}</span>
+                          <span v-if="isModelSelected(m)" class="model-panel__check">✓</span>
+                        </button>
+                      </template>
+                    </template>
+                    <p v-else class="model-panel__empty">没有匹配「{{ modelSearch }}」的模型</p>
+                  </div>
+                </div>
+              </Transition>
+            </div>
+            <div class="btn-row">
+              <button
+                class="btn btn--ghost"
+                type="button"
+                :disabled="modelBusy || busy === 'ai'"
+                @click="onFetchModels"
+              >
+                {{ modelBusy ? '获取中…' : '获取模型列表' }}
+              </button>
+              <span v-if="modelOptions.length" class="field__hint model-count">
+                {{ modelOptions.length }} 个模型可用
+              </span>
+            </div>
           </label>
 
           <label class="field">
             <span class="field__label">超时(毫秒)</span>
             <input v-model.number="aiDraft.timeoutMs" class="input" type="number" min="3000" max="120000" step="1000" />
           </label>
+
+          <div class="field">
+            <span class="field__label">识别图片</span>
+            <label class="row">
+              <span class="row__label">允许 AI 读取录入图片</span>
+              <input
+                v-model="aiDraft.vision"
+                class="switch"
+                type="checkbox"
+              />
+            </label>
+            <p class="field__hint">
+              开启后,录入框拍照/选图时会把图片一并发送给模型,AI 直接读图生成卡片。
+              需要模型本身支持图片输入(如 gpt-4o、claude 及多数新模型)。
+            </p>
+          </div>
 
           <p v-if="aiConfig.lastTestMessage" class="field__hint" :class="{ 'field__hint--bad': aiConfig.lastTestOk === false }">
             上次测试:{{ aiConfig.lastTestMessage }}
@@ -858,6 +1039,101 @@ async function onClearAll() {
 
 .input--grow {
   flex: 1;
+}
+
+/* ── 模型选择面板 ─────────────────────────────────────────── */
+.model-field {
+  position: relative;
+}
+
+/* 全屏透明遮罩:点面板外关闭;在面板之下、页面之上 */
+.model-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-sheet) - 5);
+  background: transparent;
+}
+
+.model-panel {
+  position: relative;
+  z-index: calc(var(--z-sheet) - 4);
+  margin-top: 6px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  overflow: hidden;
+}
+
+.model-panel__search {
+  padding: 8px;
+  border-bottom: 1px solid rgba(27, 36, 48, 0.06);
+  flex: 0 0 auto;
+}
+
+.model-panel__search-input {
+  min-height: 40px;
+  font-size: 15px;
+}
+
+.model-panel__list {
+  /* 面板高度上限:最多露出 6 行左右,搜索框常驻 */
+  max-height: min(52dvh, 300px);
+}
+
+.model-panel__group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 12px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.model-panel__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--ink-1);
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.model-panel__item:active {
+  background: rgba(27, 36, 48, 0.06);
+}
+
+.model-panel__item--on {
+  color: var(--pass);
+  font-weight: 600;
+}
+
+.model-panel__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-panel__check {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.model-panel__empty {
+  margin: 0;
+  padding: 18px 14px;
+  font-size: 14px;
+  color: var(--ink-3);
+  text-align: center;
 }
 
 .chips {
