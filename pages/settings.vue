@@ -35,6 +35,7 @@ import { createReviewService } from '~/lib/review-service'
 import { SEED_COLLECTIONS, SEED_SPECS, clearDemoData, seedDemoData } from '~/lib/seed'
 import { useAIConfigState, useCollections } from '~/composables/useAppState'
 import { useCheckinState } from '~/composables/useCheckinState'
+import { useLanServer } from '~/composables/useLanServer'
 import { ALL_COLLECTIONS_ID, ALL_COLLECTIONS_NAME } from '~/lib/db-constants'
 
 const { aiConfig, load: loadAIConfig, save: saveAIConfig } = useAIConfigState()
@@ -52,6 +53,8 @@ const repo = useCardRepository()
 const service = createReviewService(repo)
 
 const checkin = useCheckinState()
+/** 局域网 Web 服务(管理卡片/合集/配置)。 */
+const lanServer = useLanServer()
 /** 打卡表单本地副本,改动即保存,无需独立「保存」按钮 */
 const checkinEnabled = ref(false)
 const checkinStart = ref('09:00')
@@ -119,6 +122,9 @@ onMounted(async () => {
   await checkin.load()
   syncCheckinForm()
   fullscreenOn.value = await getFullscreenPreference()
+  // 局域网服务:恢复端口偏好,注册原生请求监听(仅原生环境生效)
+  lanServer.loadPort()
+  await lanServer.attachListener()
   // 原生环境读真实 versionName,与 build.gradle 保持一致
   if (isNativePlatform()) {
     try {
@@ -262,6 +268,19 @@ const updateResult = ref<UpdateCheckResult | null>(null)
 const updateBusy = ref(false)
 /** 更新面板是否展开。 */
 const updateOpen = ref(false)
+
+/** 局域网管理面板是否展开。 */
+const lanOpen = ref(false)
+
+async function onLanStart() {
+  const ok = await lanServer.start()
+  showToast(ok ? 'Web 服务已开启' : (lanServer.error.value || '开启失败'))
+}
+
+async function onLanStop() {
+  await lanServer.stop()
+  showToast('Web 服务已关闭')
+}
 
 async function onCheckUpdate() {
   if (updateBusy.value) return
@@ -883,6 +902,55 @@ async function onClearAll() {
         </div>
       </section>
 
+      <!-- 局域网 Web 服务:同网段设备浏览器管理 -->
+      <section class="panel">
+        <button class="panel__head" type="button" @click="lanOpen = !lanOpen">
+          <span class="panel__name">局域网管理</span>
+          <span class="panel__meta">
+            {{ lanServer.running.value ? '运行中' : '未开启' }}
+          </span>
+          <svg class="panel__caret" :class="{ 'panel__caret--open': lanOpen }" viewBox="0 0 24 24" width="18" height="18">
+            <path d="M9 6 L15 12 L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+        <div v-if="lanOpen" class="panel__body">
+          <p class="field__hint">
+            开启后在手机本地起一个网页服务。同一局域网的电脑 / 平板用浏览器打开
+            下方链接,即可远程:浏览与新增 / 删除卡片、管理合集、切换复习范围、调整 AI 配置等,
+            全部直接读写手机里的数据。仅局域网可访问,请勿在公共网络使用。
+          </p>
+
+          <div class="field">
+            <span class="field__label">端口</span>
+            <input v-model.number="lanServer.port.value" class="input" type="number" min="1" max="65535" :disabled="lanServer.running.value" />
+          </div>
+
+          <div class="btn-row">
+            <button
+              v-if="!lanServer.running.value"
+              class="btn"
+              type="button"
+              @click="onLanStart"
+            >
+              开启 Web 服务
+            </button>
+            <button v-else class="btn btn--danger" type="button" @click="onLanStop">
+              关闭服务
+            </button>
+          </div>
+
+          <p v-if="lanServer.url.value" class="lan-url">
+            <a :href="lanServer.url.value" target="_blank" rel="noopener">{{ lanServer.url.value }}</a>
+          </p>
+          <p v-if="lanServer.error.value" class="field__hint field__hint--bad">
+            {{ lanServer.error.value }}
+          </p>
+          <p class="field__hint">
+            开启后 App 会常驻一个小型网页服务;不用时请关闭。端口可修改,重启服务生效。
+          </p>
+        </div>
+      </section>
+
       <!-- 全屏沉浸:隐藏系统状态栏 -->
       <section class="panel">
         <button class="panel__head" type="button" @click="panel === 'fullscreen' ? (panel = 'none') : (panel = 'fullscreen')">
@@ -1157,6 +1225,22 @@ async function onClearAll() {
   word-break: break-word;
   max-height: 140px;
   overflow-y: auto;
+}
+
+/* 局域网管理:连接地址醒目展示,可点击复制 */
+.lan-url {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(47, 111, 237, 0.08);
+  border: 1px solid rgba(47, 111, 237, 0.25);
+  font-size: 15px;
+  font-weight: 600;
+  word-break: break-all;
+}
+.lan-url a {
+  color: var(--accent, #2f6fed);
+  text-decoration: none;
 }
 
 .input {

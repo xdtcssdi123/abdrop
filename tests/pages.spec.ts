@@ -1005,12 +1005,13 @@ describe('设置页页面集成', () => {
   it('只保留核心功能面板,无冗余入口', async () => {
     const w = await mountSettings()
     const heads = w.findAll('.panel__head').map((h) => h.text())
-    expect(heads).toHaveLength(5)
+    expect(heads).toHaveLength(6)
     expect(heads[0]).toContain('合集管理')
     expect(heads[1]).toContain('数据导入导出')
     expect(heads[2]).toContain('AI 接口配置')
     expect(heads[3]).toContain('检查更新')
-    expect(heads[4]).toContain('全屏沉浸')
+    expect(heads[4]).toContain('局域网管理')
+    expect(heads[5]).toContain('全屏沉浸')
   })
 
   it('显示卡片总数', async () => {
@@ -1073,7 +1074,7 @@ describe('设置页页面集成', () => {
 
   it('全屏沉浸面板可展开,切换开关持久化偏好', async () => {
     const w = await mountSettings()
-    await w.findAll('.panel__head')[4]!.trigger('click')
+    await w.findAll('.panel__head')[5]!.trigger('click')
     await settle()
 
     expect(w.text()).toContain('隐藏系统状态栏')
@@ -1269,5 +1270,34 @@ describe('设置页页面集成', () => {
     } finally {
       globalThis.fetch = realFetch
     }
+  })
+
+  it('局域网管理:面板存在,展开后显示端口与开启按钮', async () => {
+    const w = await mountSettings()
+    const head = w.findAll('.panel__head')[4]!
+    expect(head.text()).toContain('局域网管理')
+    // 默认收起
+    expect(w.findAll('.panel__body')).toHaveLength(0)
+
+    await head.trigger('click')
+    await settle()
+
+    expect(w.text()).toContain('端口')
+    expect(w.text()).toContain('开启 Web 服务')
+    // 端口默认 8080
+    const portInput = w.findAll('.panel__body input[type="number"]')[0]
+    expect((portInput.element as HTMLInputElement).value).toBe('8080')
+  })
+
+  it('局域网管理:Web 环境点开启提示仅原生可用', async () => {
+    const w = await mountSettings()
+    await w.findAll('.panel__head')[4]!.trigger('click')
+    await settle()
+
+    await w.findAll('.btn')[0]!.trigger('click')
+    await settle()
+
+    // 测试环境无原生插件 → 显示错误提示,不抛异常
+    expect(w.text()).toContain('仅原生')
   })
 })
