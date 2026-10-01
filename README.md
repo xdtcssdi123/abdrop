@@ -11,7 +11,7 @@
 ```bash
 pnpm install          # 自动同步 sql.js wasm 到 public/
 pnpm dev              # 浏览器调试 http://localhost:3000
-pnpm test             # 744 个单测
+pnpm test             # 776 个单测
 ```
 
 打包移动端:
@@ -126,7 +126,7 @@ IndexedDB 不可用时自动降级为内存实现,接口完全一致。
 ## 测试
 
 ```
-744 个测试 / 26 个套件
+776 个测试 / 28 个套件
 ```
 
 | 套件(部分) | 覆盖 |
