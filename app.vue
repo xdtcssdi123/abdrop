@@ -27,6 +27,7 @@ import { useCardRepository } from '~/lib/db'
 import { useCollections } from '~/composables/useAppState'
 import { importApkgFromUri } from '~/composables/useApkgOpen'
 import { decideBack } from '~/lib/back-exit'
+import { stopLanServerOnExit, useLanServer } from '~/composables/useLanServer'
 import type { PluginListenerHandle } from '@capacitor/core'
 
 let stopViewport: (() => void) | null = null
@@ -70,6 +71,9 @@ onMounted(() => {
   void getFullscreenPreference().then((on) => applyFullscreen(on))
 
   if (!isNativePlatform()) return
+  // 局域网 Web 服务:全局注册请求监听(幂等),服务随 App 进程常驻
+  void useLanServer().attachListener()
+
   // 运行中收到「打开文件」意图 → appUrlOpen(冷启动由首页用 getLaunchUrl 兜底)。
   // 能进到这里的意图已被 Manifest 的 intent-filter 过滤(仅 .apkg 类文件),
   // 所以直接尝试导入;不是合法牌组的会拿到友好报错。
@@ -98,6 +102,9 @@ onMounted(() => {
           return
         }
         if (action === 'exit-app') {
+          // 退出 App 前关闭 Web 服务(原生 ServerSocket 随进程退出也会释放,
+          // 显式 stop 保证端口立即释放、状态同步)
+          void stopLanServerOnExit()
           void App.exitApp()
           return
         }

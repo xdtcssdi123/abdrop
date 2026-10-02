@@ -1198,7 +1198,7 @@ describe('设置页页面集成', () => {
     const w = await mountSettings()
     const head = w.findAll('.panel__head')[3]!
     expect(head.text()).toContain('检查更新')
-    expect(head.text()).toContain('v1.3.1')
+    expect(head.text()).toContain('v1.3.2')
     // 默认收起
     expect(w.findAll('.panel__body')).toHaveLength(0)
   })
@@ -1208,16 +1208,16 @@ describe('设置页页面集成', () => {
     globalThis.fetch = async () =>
       new Response(
         JSON.stringify({
-          tag_name: 'v1.3.2',
-          name: 'v1.3.2',
+          tag_name: 'v1.3.3',
+          name: 'v1.3.3',
           body: '新版本更新说明',
           published_at: '2026-10-02T00:00:00Z',
-          html_url: 'https://github.com/xdtcssdi123/abdrop/releases/tag/v1.3.2',
+          html_url: 'https://github.com/xdtcssdi123/abdrop/releases/tag/v1.3.3',
           assets: [
             {
-              name: 'ABDrop-1.3.2-release.apk',
+              name: 'ABDrop-1.3.3-release.apk',
               size: 6_000_000,
-              browser_download_url: 'https://github.com/xdtcssdi123/abdrop/releases/download/v1.3.2/ABDrop-1.3.2-release.apk',
+              browser_download_url: 'https://github.com/xdtcssdi123/abdrop/releases/download/v1.3.3/ABDrop-1.3.3-release.apk',
             },
           ],
         }),
@@ -1233,11 +1233,11 @@ describe('设置页页面集成', () => {
       await checkBtn.trigger('click')
       await settle()
 
-      expect(w.text()).toContain('新版本 v1.3.2 可用')
+      expect(w.text()).toContain('新版本 v1.3.3 可用')
       expect(w.text()).toContain('下载并安装')
-      expect(w.text()).toContain('ABDrop-1.3.2-release.apk')
+      expect(w.text()).toContain('ABDrop-1.3.3-release.apk')
       // 面板 meta 同步显示新版本
-      expect(head.text()).toContain('发现新版本 v1.3.2')
+      expect(head.text()).toContain('发现新版本 v1.3.3')
     } finally {
       globalThis.fetch = realFetch
     }
@@ -1299,5 +1299,25 @@ describe('设置页页面集成', () => {
 
     // 测试环境无原生插件 → 显示错误提示,不抛异常
     expect(w.text()).toContain('仅原生')
+  })
+
+  it('局域网管理:服务状态为模块级单例 —— 卸载后重新挂载仍保持', async () => {
+    const { useLanServer } = await import('~/composables/useLanServer')
+    const server = useLanServer()
+    // 模拟开启成功后的状态(测试环境无原生插件,直接写单例状态验证跨挂载保持)
+    ;(server.running as any).value = true
+    ;(server.url as any).value = 'http://192.168.1.5:8080'
+    ;(server.port as any).value = 8080
+
+    // 重新"进入"设置页(新建挂载) —— 状态仍来自同一单例
+    const w = await mountSettings()
+    await w.findAll('.panel__head')[4]!.trigger('click')
+    await settle()
+    expect(w.text()).toContain('运行中')
+    expect(w.text()).toContain('关闭服务')
+
+    // 清理:复位单例,避免污染其他用例
+    ;(server.running as any).value = false
+    ;(server.url as any).value = ''
   })
 })

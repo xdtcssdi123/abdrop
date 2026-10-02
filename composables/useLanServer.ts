@@ -6,6 +6,12 @@
  *   lib/lan-api 的路由层处理,再把响应回填给原生层(respond)
  * - 提供 start / stop / 状态,端口偏好持久化在 localStorage
  *
+ * 生命周期设计:
+ * - 原生 ServerSocket 由插件持有,**不随页面卸载而停止** —— 开启后服务
+ *   一直运行,直到手动关闭或 App 进程退出(app.vue 的 exitApp 前会 stop)。
+ * - 因此状态(running/url/port)放**模块级单例**,任何页面读取都一致;
+ *   request 监听也只注册一次(幂等),避免重复挂载叠加监听。
+ *
  * Web / 测试环境:原生插件不存在,start() 返回失败,界面提示"仅原生可用"。
  */
 import { ref } from 'vue'
@@ -24,20 +30,29 @@ import {
 /** 端口持久化键。 */
 export const LAN_PORT_KEY = 'abdrop.lan.port'
 
+// ── 模块级单例状态:跨页面共享,服务生命周期与页面无关 ──
+/** 是否正在运行(以原生返回为准)。 */
+const running = ref(false)
+/** 局域网访问地址。 */
+const url = ref('')
+/** 错误信息(启动失败等)。 */
+const error = ref('')
+/** 端口(默认 8080)。 */
+const port = ref(8080)
+/** request 监听是否已注册(幂等,避免重复挂载叠加监听)。 */
+let listenerAttached = false
+
+/** 原生 LocalServer 插件句柄(非原生环境为 null)。 */
+function nativePlugin(): any {
+  if (!isNativePlatform()) return null
+  return (window as any).Capacitor?.Plugins?.LocalServer ?? null
+}
+
 export function useLanServer() {
   const repo = useCardRepository()
   const { save: saveAIConfig } = useAIConfigState()
   const { select } = useCollections()
   const checkin = useCheckinState()
-
-  /** 是否正在运行(以原生返回为准)。 */
-  const running = ref(false)
-  /** 局域网访问地址。 */
-  const url = ref('')
-  /** 错误信息(启动失败等)。 */
-  const error = ref('')
-  /** 端口输入(默认 8080)。 */
-  const port = ref(8080)
 
   /** 读取持久化的端口偏好。 */
   function loadPort() {
@@ -80,12 +95,16 @@ export function useLanServer() {
     }
   }
 
-  /** 注册原生请求监听(幂等)。 */
+  /**
+   * 注册原生请求监听(幂等:整个 App 生命周期只注册一次)。
+   * 可在任意页面调用,重复调用无害。
+   */
   async function attachListener(): Promise<void> {
-    if (!isNativePlatform()) return
+    const plugin = nativePlugin()
+    if (!plugin) return
+    if (listenerAttached) return
+    listenerAttached = true
     try {
-      const plugin = (window as any).Capacitor?.Plugins?.LocalServer
-      if (!plugin) return
       await plugin.addListener('request', async (data: { requestId: string; method: string; path: string; body: string }) => {
         const resp = await handleLanRequest(
           data.method,
@@ -101,11 +120,11 @@ export function useLanServer() {
         })
       })
     } catch {
-      /* 原生插件缺失:仅 Web 预览,忽略 */
+      listenerAttached = false
     }
   }
 
-  /** 启动服务。 */
+  /** 启动服务。服务持续运行,直到手动关闭或退出 App。 */
   async function start(): Promise<boolean> {
     error.value = ''
     if (!isNativePlatform()) {
@@ -114,7 +133,7 @@ export function useLanServer() {
     }
     savePort()
     try {
-      const plugin = (window as any).Capacitor?.Plugins?.LocalServer
+      const plugin = nativePlugin()
       if (!plugin) {
         error.value = '原生插件未注册'
         return false
@@ -130,14 +149,15 @@ export function useLanServer() {
     }
   }
 
-  /** 停止服务。 */
+  /** 停止服务(手动关闭 / 退出 App 时调用)。 */
   async function stop(): Promise<void> {
-    if (!isNativePlatform()) return
-    try {
-      const plugin = (window as any).Capacitor?.Plugins?.LocalServer
-      await plugin?.stop({})
-    } catch {
-      /* 忽略 */
+    const plugin = nativePlugin()
+    if (plugin) {
+      try {
+        await plugin.stop({})
+      } catch {
+        /* 忽略 */
+      }
     }
     running.value = false
     url.value = ''
@@ -153,4 +173,9 @@ export function useLanServer() {
     stop,
     attachListener,
   }
+}
+
+/** 全局退出钩子:App 进程退出前关闭 Web 服务(供 app.vue 调用)。 */
+export async function stopLanServerOnExit(): Promise<void> {
+  await useLanServer().stop()
 }
