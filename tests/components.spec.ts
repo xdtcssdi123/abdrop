@@ -59,19 +59,19 @@ describe('KnowledgeCard 渲染', () => {
     expect(w.text()).toContain('空卡片')
   })
 
-  it('标题过长时未翻面也进入滚动模式,避免顶部被裁', () => {
+  it('标题长时完整渲染不截断,且不使用已废弃的 front-overflows 类', () => {
     const longFront = '这是一个特别长的标题'.repeat(12)
     const w = mount(KnowledgeCard, { props: { card: makeCard({ front: longFront }) } })
     const content = w.find('.card__content')
-    expect(content.classes()).toContain('card__content--front-overflows')
-    expect(content.classes()).toContain('card__scroll')
-    expect(w.text()).toContain(longFront.slice(0, 20))
+    // 标题全文渲染,首尾都在(未被截断/裁剪)
+    expect(content.text()).toContain(longFront.slice(0, 20))
+    expect(content.text()).toContain(longFront.slice(-10))
+    expect(content.classes()).not.toContain('card__content--front-overflows')
   })
 
-  it('标题较短时未翻面保持居中模式', () => {
+  it('普通标题时正常渲染', () => {
     const w = mount(KnowledgeCard, { props: { card: makeCard() } })
-    const content = w.find('.card__content')
-    expect(content.classes()).not.toContain('card__content--front-overflows')
+    expect(w.find('.card__front').text()).toContain('什么是极限')
   })
 
   it('显示合集名', () => {

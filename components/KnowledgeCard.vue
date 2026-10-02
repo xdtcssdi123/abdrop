@@ -68,15 +68,6 @@ const showBack = computed(() => props.active && props.revealed && Boolean(props.
 
 /** 长答案超过一定长度时收一收字号,避免溢出。 */
 const backIsLong = computed(() => props.card.back.length > 120)
-
-/**
- * 正面标题是否可能超高(约 3 行以上)。
- * 未翻面时内容区默认居中 + overflow:hidden,超高会把顶部裁掉;
- * 标题过长时切换为「可滚动 + 顶部对齐」,保证第一行不被盖住。
- */
-const frontOverflows = computed(
-  () => (props.card.front || props.card.back).length > 96,
-)
 </script>
 
 <template>
@@ -96,13 +87,10 @@ const frontOverflows = computed(
       <span class="card__due">{{ dueText }}</span>
     </header>
 
-    <!-- 正面/答案区:翻面后整体可滚动;未翻面时标题过长也切滚动,避免顶部被裁 -->
+    <!-- 正面/答案区:翻面后整体可滚动;未翻面内容超高时也可滚动(不裁顶) -->
     <div
       class="card__content"
-      :class="{
-        'card__content--revealed card__scroll': showBack,
-        'card__scroll card__content--front-overflows': !showBack && frontOverflows,
-      }"
+      :class="{ 'card__content--revealed card__scroll': showBack }"
     >
       <p v-if="!card.front && !card.back" class="card__empty">空卡片</p>
       <!-- 正面:优先纯文本;无正面时退回 Markdown 渲染背面首部 -->
@@ -239,36 +227,14 @@ const frontOverflows = computed(
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   gap: 13px;
   min-height: 0;
-  overflow: hidden;
-  position: relative;
-  z-index: 1;
-}
-
-/*
- * 未翻面但标题过长:从「居中 + 裁顶」切到「顶部对齐 + 可滚动」。
- * 这样长标题第一行完整可见,向上滚动可读全文,不会被 card__top 盖住。
- */
-.card__content--front-overflows {
-  justify-content: flex-start;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  touch-action: pan-y;
-  -webkit-overflow-scrolling: touch;
-  padding-right: 4px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(27, 36, 48, 0.18) transparent;
-}
-
-/*
- * 翻面后的内容区:整体可滚动。
- * 问题(正面)缩小置顶,答案与图片从上到下自然排布;
- * 内容超高时滚动查看,而不是 overflow:hidden 把底部裁掉。
- */
-.card__content--revealed {
-  justify-content: flex-start;
+  /*
+   * 内容超高允许滚动(未翻面长标题也不裁顶)。
+   * 居中不靠容器 justify-content(超高会上下裁顶),而是交给子元素的
+   * `margin: auto 0`:内容放得下时居中,放不下时 margin 收缩为 0、
+   * 顶部对齐且可滚动 —— 任何长度标题第一行都完整可见。
+   */
   overflow-y: auto;
   overscroll-behavior: contain;
   /* 触控交给浏览器原生滚动;横向滑卡不冲突(.stack pan-y 已让出纵向) */
@@ -277,6 +243,16 @@ const frontOverflows = computed(
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(27, 36, 48, 0.18) transparent;
+  position: relative;
+  z-index: 1;
+}
+
+/*
+ * 翻面后的内容区:问题(正面)缩小置顶,答案与图片从上到下自然排布;
+ * 内容超高时滚动查看,而不是 overflow:hidden 把底部裁掉。
+ */
+.card__content--revealed {
+  justify-content: flex-start;
 }
 
 /* 翻面后:问题不再占主导,收缩为答案的引导行 */
@@ -285,6 +261,7 @@ const frontOverflows = computed(
   line-height: 1.48;
   font-weight: 600;
   flex: 0 0 auto;
+  margin: 0;
 }
 
 .card__content--revealed .card__divider {
@@ -306,7 +283,12 @@ const frontOverflows = computed(
 
 /* 正面:卡片的主体。卡片变小后,28px 在视觉上比原来的 30px 更醒目 */
 .card__front {
-  margin: 0;
+  /*
+   * margin: auto 0 是「居中 + 永不裁顶」的关键:
+   * 内容低于容器 → auto 边距等分,垂直居中;
+   * 内容超高 → margin 塌缩为 0,顶部对齐,配合容器 overflow-y:auto 可滚动。
+   */
+  margin: auto 0;
   font-size: 28px;
   line-height: 1.42;
   font-weight: 650;

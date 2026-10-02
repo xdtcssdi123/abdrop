@@ -1198,7 +1198,7 @@ describe('设置页页面集成', () => {
     const w = await mountSettings()
     const head = w.findAll('.panel__head')[3]!
     expect(head.text()).toContain('检查更新')
-    expect(head.text()).toContain('v1.2.2')
+    expect(head.text()).toContain('v1.2.3')
     // 默认收起
     expect(w.findAll('.panel__body')).toHaveLength(0)
   })
@@ -1208,16 +1208,16 @@ describe('设置页页面集成', () => {
     globalThis.fetch = async () =>
       new Response(
         JSON.stringify({
-          tag_name: 'v1.2.3',
-          name: 'v1.2.3',
+          tag_name: 'v1.2.4',
+          name: 'v1.2.4',
           body: '新版本更新说明',
           published_at: '2026-10-02T00:00:00Z',
-          html_url: 'https://github.com/xdtcssdi123/abdrop/releases/tag/v1.2.3',
+          html_url: 'https://github.com/xdtcssdi123/abdrop/releases/tag/v1.2.4',
           assets: [
             {
-              name: 'ABDrop-1.2.3-release.apk',
+              name: 'ABDrop-1.2.4-release.apk',
               size: 6_000_000,
-              browser_download_url: 'https://github.com/xdtcssdi123/abdrop/releases/download/v1.2.3/ABDrop-1.2.3-release.apk',
+              browser_download_url: 'https://github.com/xdtcssdi123/abdrop/releases/download/v1.2.4/ABDrop-1.2.4-release.apk',
             },
           ],
         }),
@@ -1233,11 +1233,11 @@ describe('设置页页面集成', () => {
       await checkBtn.trigger('click')
       await settle()
 
-      expect(w.text()).toContain('新版本 v1.2.3 可用')
+      expect(w.text()).toContain('新版本 v1.2.4 可用')
       expect(w.text()).toContain('下载并安装')
-      expect(w.text()).toContain('ABDrop-1.2.3-release.apk')
+      expect(w.text()).toContain('ABDrop-1.2.4-release.apk')
       // 面板 meta 同步显示新版本
-      expect(head.text()).toContain('发现新版本 v1.2.3')
+      expect(head.text()).toContain('发现新版本 v1.2.4')
     } finally {
       globalThis.fetch = realFetch
     }
