@@ -11,7 +11,7 @@
 ```bash
 pnpm install          # 自动同步 sql.js wasm 到 public/
 pnpm dev              # 浏览器调试 http://localhost:3000
-pnpm test             # 816 个单测
+pnpm test             # 841 个单测
 ```
 
 打包移动端:
@@ -126,7 +126,7 @@ IndexedDB 不可用时自动降级为内存实现,接口完全一致。
 ## 测试
 
 ```
-816 个测试 / 30 个套件
+841 个测试 / 31 个套件
 ```
 
 | 套件(部分) | 覆盖 |
@@ -240,6 +240,19 @@ ABDrop **全部数据存在本机**,无账号、无云端同步。分两类存�
 **实现**:Android 原生插件 `LocalServerPlugin`(Kotlin/Java 起极简 HTTP 服务器)→ Capacitor 桥接把请求转发给 JS 层 `lib/lan-api.ts`(纯路由,可单测)→ 管理页 `lib/lan-admin.ts`(单文件 HTML)。仅 Android 原生支持,Web 预览显示"仅原生可用"。
 
 **安全提醒**:服务**无口令**,同网段任何设备都能访问;请仅在可信局域网开启,用完即关。
+
+### MCP 接入(外部 AI Agent 控制)
+
+同一服务还暴露标准 **MCP(Model Context Protocol)** 端点,外部 AI Agent(Claude Desktop / Claude Code 等支持 MCP 的客户端)配置后即可直接读写卡片与设置:
+
+- 端点:`http://<手机IP>:<端口>/mcp`(设置页「局域网管理」面板会显示具体地址);
+- 客户端配置(以 Claude Desktop 的 `claude_desktop_config.json` 为例):
+  ```json
+  { "mcpServers": { "abdrop": { "type": "http", "url": "http://192.168.x.x:8080/mcp" } } }
+  ```
+- 工具:`abdrop_health` / `abdrop_list_cards` / `abdrop_add_card` / `abdrop_delete_card` / `abdrop_list_collections` / `abdrop_create_collection` / `abdrop_set_scope` / `abdrop_get_config` / `abdrop_set_config`(与 Web 管理页能力一致,直接读写手机数据);
+
+**实现**:`lib/mcp.ts`(JSON-RPC 2.0 协议处理,纯逻辑可单测)→ `lib/lan-api.ts` 的 `/mcp` 路由转发 → 原生通道复用局域网服务。
 
 ---
 

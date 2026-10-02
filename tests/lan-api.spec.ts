@@ -23,7 +23,7 @@ function makeDeps(overrides: Partial<LanApiDeps> = {}): LanApiDeps {
   let fullscreen = false
   return {
     repo,
-    version: '1.2.3',
+    version: '1.3.0',
     getAIConfig: async () => ({ ...ai }),
     saveAIConfig: async (cfg) => {
       ai = { ...cfg }
@@ -98,7 +98,7 @@ describe('handleLanRequest', () => {
     const data = JSON.parse(r.body)
     expect(r.status).toBe(200)
     expect(data.ok).toBe(true)
-    expect(data.version).toBe('1.2.3')
+    expect(data.version).toBe('1.3.0')
     expect(data.cards).toBe(1)
     expect(data.collections).toBeGreaterThanOrEqual(1)
   })
@@ -238,5 +238,38 @@ describe('handleLanRequest', () => {
     const r = await handleLanRequest('GET', '/api/cards', '', bad)
     expect(r.status).toBe(500)
     expect(JSON.parse(r.body).error).toContain('db down')
+  })
+
+  it('POST /mcp 处理 JSON-RPC 握手(initialize)', async () => {
+    const r = await handleLanRequest(
+      'POST',
+      '/mcp',
+      JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't' } } }),
+      deps,
+    )
+    expect(r.status).toBe(200)
+    const data = JSON.parse(r.body)
+    expect(data.result.protocolVersion).toBe('2025-06-18')
+    expect(data.result.capabilities.tools).toEqual({})
+  })
+
+  it('POST /mcp 工具调用真实写卡片', async () => {
+    const r = await handleLanRequest(
+      'POST',
+      '/mcp',
+      JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'abdrop_add_card', arguments: { front: 'MCP 卡片', back: '由 AI 创建' } } }),
+      deps,
+    )
+    expect(r.status).toBe(200)
+    const data = JSON.parse(r.body)
+    expect(data.result.isError).toBe(false)
+    expect(JSON.parse(data.result.content[0].text).card.front).toBe('MCP 卡片')
+    expect((await deps.repo.listCards()).length).toBe(1)
+  })
+
+  it('POST /mcp 非法 JSON 返回解析错误', async () => {
+    const r = await handleLanRequest('POST', '/mcp', '{broken', deps)
+    expect(r.status).toBe(400)
+    expect(JSON.parse(r.body).error.code).toBe(-32700)
   })
 })

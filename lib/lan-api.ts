@@ -22,6 +22,7 @@ import type { CardRepository } from '~/lib/db'
 import type { AIConfig, Collection, KnowledgeCard } from '~/types'
 import type { CheckinConfig } from '~/lib/checkin'
 import { LAN_ADMIN_HTML } from '~/lib/lan-admin'
+import { handleMcpMessage } from '~/lib/mcp'
 
 /** 路由层需要的全部外部能力,由调用方(useLanServer)注入。 */
 export interface LanApiDeps {
@@ -114,6 +115,12 @@ export async function handleLanRequest(
     // 管理页
     if (method === 'GET' && (path === '/' || path === '/index.html')) {
       return { status: 200, contentType: 'text/html', body: LAN_ADMIN_HTML }
+    }
+
+    // MCP 端点:外部 AI Agent(Claude 等)通过 JSON-RPC 控制卡片/设置
+    if (path === '/mcp' || path === '/mcp/') {
+      const mcpResp = await handleMcpMessage(body, deps)
+      return mcpResp
     }
     if (!isApi) {
       return json(404, { error: 'not found' })

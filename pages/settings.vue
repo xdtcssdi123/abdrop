@@ -948,6 +948,20 @@ async function onClearAll() {
           <p class="field__hint">
             开启后 App 会常驻一个小型网页服务;不用时请关闭。端口可修改,重启服务生效。
           </p>
+
+          <!-- MCP 端点:外部 AI Agent(Claude 等)远程控制 -->
+          <template v-if="lanServer.url.value">
+            <div class="mcp-box">
+              <span class="mcp-box__title">AI 接入(MCP)</span>
+              <p class="mcp-box__hint">
+                把下面的端点配到 Claude Desktop / Claude Code 等支持 MCP 的客户端,
+                AI 即可直接读写卡片、合集与配置(全部工具:卡片增删查 / 合集 / 复习范围 / AI·打卡·全屏配置)。
+              </p>
+              <p class="lan-url">
+                <a :href="`${lanServer.url.value}/mcp`" target="_blank" rel="noopener">{{ lanServer.url.value }}/mcp</a>
+              </p>
+            </div>
+          </template>
         </div>
       </section>
 
@@ -1241,6 +1255,28 @@ async function onClearAll() {
 .lan-url a {
   color: var(--accent, #2f6fed);
   text-decoration: none;
+}
+
+/* MCP 接入说明区 */
+.mcp-box {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(31, 157, 99, 0.07);
+  border: 1px solid rgba(31, 157, 99, 0.22);
+}
+.mcp-box__title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ok, #1f9d63);
+  margin-bottom: 6px;
+}
+.mcp-box__hint {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--ink-3);
+  line-height: 1.5;
 }
 
 .input {
