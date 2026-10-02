@@ -11,8 +11,8 @@
  * - GitHub Release tag 形如 v1.0.0,APK 资产名含 release 且以 .apk 结尾
  */
 
-export const APP_VERSION = '1.3.0'
-export const APP_VERSION_CODE = 9
+export const APP_VERSION = '1.3.1'
+export const APP_VERSION_CODE = 10
 
 /**
  * GitHub 仓库(发版与更新检测共用)。

@@ -7,6 +7,8 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -193,22 +195,100 @@ public class LocalServerPlugin extends Plugin {
     }
 
     /** 取局域网 IPv4(优先非回环、非虚拟网卡)。拿不到时回退 127.0.0.1。 */
+    /**
+     * 取局域网 IPv4 —— 优先「真正对外收发数据」的接口。
+     *
+     * 为什么不能直接拿第一个非回环 IPv4:手机上同时存在 WiFi / 移动数据 /
+     * 热点 / VPN 等多个接口,遍历顺序不确定,可能拿到移动数据的 10.x 地址,
+     * 而用户期望的是 WiFi 的 192.168.x.x。
+     *
+     * 策略(按可靠性降序):
+     *   1. 默认路由所在接口(读 /proc/net/route,数据实际从哪个口出去)
+     *   2. 名称像 WiFi/以太网 的接口(wlan/eth/en)
+     *   3. 排除虚拟网卡后兜底取第一个 IPv4
+     */
     private static String getLocalIpAddress() {
+        String viaRoute = ipv4OfDefaultRouteInterface();
+        if (viaRoute != null) return viaRoute;
+
         try {
             for (Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
                  en.hasMoreElements(); ) {
                 NetworkInterface ni = en.nextElement();
-                if (!ni.isUp() || ni.isLoopback()) continue;
-                for (Enumeration<InetAddress> addrs = ni.getInetAddresses(); addrs.hasMoreElements(); ) {
-                    InetAddress addr = addrs.nextElement();
-                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
-                        return addr.getHostAddress();
-                    }
+                if (!isCandidate(ni)) continue;
+                String name = ni.getName().toLowerCase(Locale.US);
+                if (name.startsWith("wlan") || name.startsWith("eth") || name.startsWith("en")) {
+                    String ip = firstIpv4(ni);
+                    if (ip != null) return ip;
                 }
+            }
+            // 兜底:任意候选接口的第一个 IPv4
+            for (Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
+                 en.hasMoreElements(); ) {
+                NetworkInterface ni = en.nextElement();
+                if (!isCandidate(ni)) continue;
+                String ip = firstIpv4(ni);
+                if (ip != null) return ip;
             }
         } catch (SocketException ignored) {
         }
         return "127.0.0.1";
+    }
+
+    /** 是否候选:已启用、非回环、非虚拟网卡。 */
+    private static boolean isCandidate(NetworkInterface ni) throws SocketException {
+        if (!ni.isUp() || ni.isLoopback()) return false;
+        String name = ni.getName().toLowerCase(Locale.US);
+        // 排除常见虚拟/数据网卡:docker、VPN(tun)、移动数据(rmnet/radio)、热点(ap)、ppp
+        return !(name.startsWith("docker") || name.startsWith("veth") || name.startsWith("virbr")
+                || name.startsWith("tun") || name.startsWith("rmnet") || name.startsWith("radio")
+                || name.startsWith("ap") || name.startsWith("ppp") || name.contains("dummy"));
+    }
+
+    /** 取接口上第一个 IPv4。 */
+    private static String firstIpv4(NetworkInterface ni) {
+        for (Enumeration<InetAddress> addrs = ni.getInetAddresses(); addrs.hasMoreElements(); ) {
+            InetAddress addr = addrs.nextElement();
+            if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                return addr.getHostAddress();
+            }
+        }
+        return null;
+    }
+
+    /** 读 /proc/net/route,找默认路由(目的 0.0.0.0)对应的接口 IP。 */
+    private static String ipv4OfDefaultRouteInterface() {
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new FileReader("/proc/net/route"));
+            String line;
+            // 首行是表头
+            while ((line = br.readLine()) != null) {
+                String[] parts = line.trim().split("\\s+");
+                if (parts.length < 3) continue;
+                // parts[0]=接口名 parts[1]=目的地址(十六进制小端) —— 全 0 即默认路由
+                if (parts[1].equals("00000000") && !parts[0].equals("lo")) {
+                    String iface = parts[0];
+                    try {
+                        NetworkInterface ni = NetworkInterface.getByName(iface);
+                        if (ni != null && isCandidate(ni)) {
+                            String ip = firstIpv4(ni);
+                            if (ip != null) return ip;
+                        }
+                    } catch (SocketException ignored) {
+                    }
+                }
+            }
+        } catch (IOException ignored) {
+        } finally {
+            if (br != null) {
+                try {
+                    br.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+        return null;
     }
 
     /** 极简 HTTP 请求解析:请求行 + 头(取 Content-Length)+ body。 */

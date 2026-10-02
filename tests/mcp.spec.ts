@@ -24,7 +24,7 @@ function makeDeps(): McpDeps {
   let fullscreen = false
   return {
     repo,
-    version: '1.3.0',
+    version: '1.3.1',
     getAIConfig: async () => ({ ...ai }),
     saveAIConfig: async (cfg) => {
       ai = { ...cfg }
@@ -73,7 +73,7 @@ describe('MCP 握手与协议', () => {
     expect(r?.id).toBe(1)
     expect(r?.result?.protocolVersion).toBe(MCP_PROTOCOL_VERSION)
     expect(r?.result?.serverInfo.name).toBe(MCP_SERVER_NAME)
-    expect(r?.result?.serverInfo.version).toBe('1.3.0')
+    expect(r?.result?.serverInfo.version).toBe('1.3.1')
     expect(r?.result?.capabilities.tools).toEqual({})
   })
 
