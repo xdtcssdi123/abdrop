@@ -68,6 +68,15 @@ const showBack = computed(() => props.active && props.revealed && Boolean(props.
 
 /** 长答案超过一定长度时收一收字号,避免溢出。 */
 const backIsLong = computed(() => props.card.back.length > 120)
+
+/**
+ * 正面标题是否可能超高(约 3 行以上)。
+ * 未翻面时内容区默认居中 + overflow:hidden,超高会把顶部裁掉;
+ * 标题过长时切换为「可滚动 + 顶部对齐」,保证第一行不被盖住。
+ */
+const frontOverflows = computed(
+  () => (props.card.front || props.card.back).length > 96,
+)
 </script>
 
 <template>
@@ -87,8 +96,14 @@ const backIsLong = computed(() => props.card.back.length > 120)
       <span class="card__due">{{ dueText }}</span>
     </header>
 
-    <!-- 正面/答案区:翻面后整体可滚动(答案/图片超高时可滚看全) -->
-    <div class="card__content" :class="{ 'card__content--revealed card__scroll': showBack }">
+    <!-- 正面/答案区:翻面后整体可滚动;未翻面时标题过长也切滚动,避免顶部被裁 -->
+    <div
+      class="card__content"
+      :class="{
+        'card__content--revealed card__scroll': showBack,
+        'card__scroll card__content--front-overflows': !showBack && frontOverflows,
+      }"
+    >
       <p v-if="!card.front && !card.back" class="card__empty">空卡片</p>
       <!-- 正面:优先纯文本;无正面时退回 Markdown 渲染背面首部 -->
       <p v-else-if="card.front" class="card__front">{{ card.front }}</p>
@@ -230,6 +245,21 @@ const backIsLong = computed(() => props.card.back.length > 120)
   overflow: hidden;
   position: relative;
   z-index: 1;
+}
+
+/*
+ * 未翻面但标题过长:从「居中 + 裁顶」切到「顶部对齐 + 可滚动」。
+ * 这样长标题第一行完整可见,向上滚动可读全文,不会被 card__top 盖住。
+ */
+.card__content--front-overflows {
+  justify-content: flex-start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(27, 36, 48, 0.18) transparent;
 }
 
 /*
